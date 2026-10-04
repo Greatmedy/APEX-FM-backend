@@ -17,6 +17,8 @@ const UserSchema = new Schema({
     templateKey: String,
     waitTier: Number,
   },
+  resetTokenHash: String,
+  resetExpires: Date,
 }, { timestamps: true });
 
 const ClubSchema = new Schema({

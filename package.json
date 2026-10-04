@@ -9,7 +9,9 @@
     "dev": "node --watch src/index.js",
     "test:sim": "node scripts/simtest.js"
   },
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=18"
+  },
   "dependencies": {
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
@@ -19,6 +21,7 @@
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.5.0",
     "node-cron": "^3.0.3",
+    "nodemailer": "^10.0.14",
     "socket.io": "^4.7.5"
   }
 }

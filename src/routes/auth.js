@@ -1,3 +1,6 @@
+import crypto from 'crypto';
+import { config } from '../config.js';
+import { sendResetEmail } from '../services/mail.js';
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import rateLimit from 'express-rate-limit';
@@ -36,5 +39,36 @@ r.post('/login', limiter, wrap(async (req, res) => {
 
 r.post('/logout', auth, (req, res) => res.json({ ok: true }));
 r.get('/me', auth, (req, res) => res.json({ user: userOut(req.user) }));
+
+const sha = (s) => crypto.createHash('sha256').update(s).digest('hex');
+
+r.post('/forgot', limiter, wrap(async (req, res) => {
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  const generic = { ok: true, message: 'If that email has an account, a reset link is on its way.' };
+  if (!/^\S+@\S+\.\S+$/.test(email)) return res.json(generic);
+  const user = await User.findOne({ email });
+  if (user) {
+    const token = crypto.randomBytes(32).toString('hex');
+    user.resetTokenHash = sha(token);
+    user.resetExpires = new Date(Date.now() + 30 * 60 * 1000);
+    await user.save();
+    const link = `${config.clientUrl}/reset-password?token=${token}`;
+    sendResetEmail(user.email, user.managerName || user.usernameDisplay, link).catch((e) => console.error('[mail]', e.message));
+  }
+  res.json(generic);
+}));
+
+r.post('/reset', limiter, wrap(async (req, res) => {
+  const { token = '', password = '', confirmPassword = '' } = req.body || {};
+  if (String(password).length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters.' });
+  if (password !== confirmPassword) return res.status(400).json({ error: 'Passwords do not match.' });
+  const user = await User.findOne({ resetTokenHash: sha(String(token)), resetExpires: { $gt: new Date() } });
+  if (!user) return res.status(400).json({ error: 'This reset link is invalid or has expired. Request a new one.' });
+  user.passwordHash = await bcrypt.hash(password, 10);
+  user.resetTokenHash = undefined;
+  user.resetExpires = undefined;
+  await user.save();
+  res.json({ ok: true });
+}));
 
 export default r;

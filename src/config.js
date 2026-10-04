@@ -9,6 +9,10 @@ export const config = {
   adminPassword: process.env.ADMIN_PASSWORD || '',
   whatsapp: process.env.WHATSAPP_GROUP_LINK || '',
   seasonStart: process.env.SEASON_START || '2026-11-02',
+  gmailUser: process.env.GMAIL_USER || '',
+  gmailPass: (process.env.GMAIL_APP_PASSWORD || '').replace(/\s/g, ''),
+  mailFrom: process.env.MAIL_FROM || process.env.GMAIL_USER || '',
+  clientUrl: (process.env.CLIENT_URL || (process.env.CLIENT_ORIGIN || 'http://localhost:5173').split(',')[0]).trim().replace(/\/$/, ''),
 };
 
 // Timing rules (all kickoffs are 20:00 WAT = 19:00 UTC)
