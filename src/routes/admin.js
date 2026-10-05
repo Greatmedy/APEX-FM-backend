@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { auth, admin, wrap } from '../middleware/auth.js';
-import { Club, Player, Fixture, Setting, Post, User } from '../models/index.js';
+import { Club, Player, Fixture, Setting, Post, User, Season } from '../models/index.js';
 import { setPlainResult } from '../services/results.js';
 import { rolloverSeason, currentSeason } from '../services/seasons.js';
 import { freeSlots } from '../services/clubs.js';
@@ -69,4 +69,22 @@ r.post('/season/next', wrap(async (req, res) => {
   res.json({ ok: true, season: next.number, startsAt: next.startsAt });
 }));
 r.delete('/board/:id', wrap(async (req, res) => { await Post.deleteOne({ _id: req.params.id }); res.json({ ok: true }); }));
+
+r.post('/season/shift', wrap(async (req, res) => {
+  const target = new Date(req.body?.startsAt);
+  if (isNaN(target) || target.getUTCDay() !== 1 || target.getUTCHours() !== 19 || target.getUTCMinutes() !== 0) {
+    return res.status(400).json({ error: 'Pick a Monday. Kickoff is fixed at 20:00 WAT.' });
+  }
+  const season = await currentSeason();
+  if (!season) return res.status(404).json({ error: 'No season found.' });
+  const played = await Fixture.countDocuments({ season: season.number, status: { $in: ['live', 'starting', 'finished'] } });
+  if (played) return res.status(409).json({ error: 'A match has already started or finished. The season can no longer be moved.' });
+  const shift = target.getTime() - season.startsAt.getTime();
+  await Season.collection.updateOne({ number: season.number }, [{ $set: {
+    startsAt: { $add: ['$startsAt', shift] }, endsAt: { $add: ['$endsAt', shift] }, breakUntil: { $add: ['$breakUntil', shift] },
+  } }]);
+  await Fixture.collection.updateMany({ season: season.number }, [{ $set: { kickoffAt: { $add: ['$kickoffAt', shift] } } }]);
+  res.json({ ok: true, startsAt: target, movedDays: Math.round(shift / 86400000) });
+}));
+
 export default r;
