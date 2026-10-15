@@ -47,16 +47,16 @@ function playMatch(hk, ak, seed) {
   return { st, n, stats: finalStats(st, rng) };
 }
 const keys = ['mancity', 'chelsea', 'brighton', 'westham', 'realmadrid', 'athletic', 'inter', 'dortmund'];
-let G = 0, SH = 0, SOT = 0, F = 0, Y = 0, R = 0, C = 0, N = 0, XG = 0, M = 0, hw = 0, aw = 0, dr = 0, strongWin = 0, strongN = 0;
+let G = 0, SH = 0, SOT = 0, F = 0, Y = 0, R = 0, C = 0, OFF = 0, TI = 0, N = 0, XG = 0, M = 0, hw = 0, aw = 0, dr = 0, strongWin = 0, strongN = 0;
 for (let i = 0; i < 300; i++) {
   const hk = keys[i % keys.length], ak = keys[(i * 3 + 1) % keys.length];
   if (hk === ak) continue;
   const { st, n, stats } = playMatch(hk, ak, 's' + i);
   M++; N += n; G += st.score.h + st.score.a; SH += stats.h.shots + stats.a.shots; SOT += stats.h.sot + stats.a.sot; F += stats.h.fouls + stats.a.fouls;
-  Y += stats.h.yellow + stats.a.yellow; R += stats.h.red + stats.a.red; C += stats.h.corners + stats.a.corners; XG += stats.h.xg + stats.a.xg;
+  Y += stats.h.yellow + stats.a.yellow; R += stats.h.red + stats.a.red; C += stats.h.corners + stats.a.corners; OFF += stats.h.offsides + stats.a.offsides; TI += stats.h.throwIns + stats.a.throwIns; XG += stats.h.xg + stats.a.xg;
   if (st.score.h > st.score.a) hw++; else if (st.score.h < st.score.a) aw++; else dr++;
 }
-console.log({ matches: M, eventsPerMatch: (N / M).toFixed(0), goals: (G / M).toFixed(2), shots: (SH / M).toFixed(1), sot: (SOT / M).toFixed(1), fouls: (F / M).toFixed(1), yellows: (Y / M).toFixed(2), reds: (R / M).toFixed(2), corners: (C / M).toFixed(1), xg: (XG / M).toFixed(2), home: hw, away: aw, draw: dr });
+console.log({ matches: M, eventsPerMatch: (N / M).toFixed(0), goals: (G / M).toFixed(2), shots: (SH / M).toFixed(1), sot: (SOT / M).toFixed(1), fouls: (F / M).toFixed(1), yellows: (Y / M).toFixed(2), reds: (R / M).toFixed(2), corners: (C / M).toFixed(1), offsides: (OFF / M).toFixed(1), throwIns: (TI / M).toFixed(1), xg: (XG / M).toFixed(2), home: hw, away: aw, draw: dr });
 const r = playMatch('mancity', 'westham', 'final');
 console.log('sample', r.st.score, r.stats);
 let up = 0, tot = 0;

@@ -98,6 +98,15 @@ NotificationSchema.index({ user: 1, dedupeKey: 1 }, { unique: true, sparse: true
 const PostSchema = new Schema({ user: ObjectId, author: String, clubName: String, text: String }, { timestamps: true });
 const SettingSchema = new Schema({ key: { type: String, unique: true }, value: String });
 
+// Pitch-side advertising (3D match boards). Images live in their own collection, never in match events.
+const AdImageSchema = new Schema({ season: Number, gameweek: Number, contentType: String, size: Number, data: Buffer }, { timestamps: true });
+AdImageSchema.index({ season: 1, gameweek: 1 });
+const AdLineupSchema = new Schema({
+  season: Number, gameweek: Number,
+  brands: [{ _id: false, name: String, image: { type: ObjectId, ref: 'AdImage' } }],
+}, { timestamps: true });
+AdLineupSchema.index({ season: 1, gameweek: 1 }, { unique: true });
+
 export const User = model('User', UserSchema);
 export const Club = model('Club', ClubSchema);
 export const Player = model('Player', PlayerSchema);
@@ -107,3 +116,5 @@ export const Season = model('Season', SeasonSchema);
 export const Notification = model('Notification', NotificationSchema);
 export const Post = model('Post', PostSchema);
 export const Setting = model('Setting', SettingSchema);
+export const AdImage = model('AdImage', AdImageSchema);
+export const AdLineup = model('AdLineup', AdLineupSchema);

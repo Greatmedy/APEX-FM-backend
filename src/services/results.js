@@ -23,7 +23,7 @@ export async function afterResult(fx, hg, ag, { forfeitBy = null, noShow = false
       const iForfeited = String(forfeitBy) === String(club._id);
       title = iForfeited ? 'You forfeited this match' : 'Opponent forfeited. You win 3-0';
       body = iForfeited ? `${label(opp)} gets a 3-0 win.` : `${label(opp)} forfeited the league. No need to watch.`;
-    } else if (noShow) body = 'Neither manager was ready at kickoff. Recorded as 0-0, one point each.';
+    } else if (noShow) body = 'Neither manager was ready at kickoff, so the match was not played. A result is always decided in that case: it never ends level.';
     await notify(club.manager, { type: forfeitBy ? 'forfeit' : 'result', title, body, link, dedupeKey: `${forfeitBy ? 'forfeit' : 'result'}:${fx._id}` });
   }
   getIO()?.emit('league-update', { tier: fx.leagueTier });
@@ -65,7 +65,7 @@ export async function finalizeLive(fxId, st, setup, stats) {
   return fx;
 }
 
-/** Result without a simulation: 0-0 no-show, admin forced result. Reverses a previous result if one was already applied. */
+/** Result without a simulation: no-show (decided scoreline, never a draw), admin forced result. Reverses a previous result if one was already applied. */
 export async function setPlainResult(fx, hg, ag, { noShow = false, forced = false } = {}) {
   const prev = ['finished', 'forfeit'].includes(fx.status) && fx.result?.h != null ? { h: fx.result.h, a: fx.result.a } : null;
   if (prev) await applyResult({ season: fx.season, tier: fx.leagueTier, home: fx.home, away: fx.away, hg: prev.h, ag: prev.a, sign: -1 });

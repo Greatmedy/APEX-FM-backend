@@ -66,6 +66,12 @@ function shotChain(st, rng, A, at, { pen = false, shooter } = {}) {
       evs.push(ev('goalkick', B, t2 + 14, { p: gk.id, z: 0.06, y: 0.5 }));
     }
   }
+  // Presentation hint for renderers: the outcome the following events will confirm. Consumes no RNG.
+  const out = evs.find((e) => ['goal', 'save', 'miss'].includes(e.k));
+  if (out) {
+    evs[0].o = out.k === 'miss' ? (out.bl ? 'block' : out.post ? 'post' : 'miss') : out.k;
+    if (out.k === 'miss') evs[0].ty = out.y;
+  }
   return evs;
 }
 
@@ -116,6 +122,18 @@ export function genAction(st, rng, at) {
   const pShot = z < 0.55 ? 0.004 : (0.07 + 0.3 * clamp((z - 0.55) / 0.4, 0, 1)) * fxA.shot * clamp(1 + (rA.atk - rB.def) * 0.006, 0.7, 1.4);
   if (rng() < pShot) return shotChain(st, rng, A, at);
 
+  // ball out of play for a throw-in (touchline). Awarded to the side that did not touch it last, mostly.
+  if (rng() < 0.1) {
+    const toB = rng() < 0.62, T = toB ? B : A, ST = st.sides[T];
+    const zT = clamp((toB ? 1 - z : z) + rand(rng, -0.04, 0.04), 0.06, 0.94);
+    const edge = st.y < 0.5 ? 0 : 1;
+    const thrower = weighted(rng, onPitch(ST).filter((p) => p.sg !== 'GK'), (p) => {
+      const py = T === 'h' ? p.sy : 1 - p.sy;
+      return 0.03 + gauss(py - edge, 0.3) * gauss(p.sx - zT, 0.3);
+    });
+    return [ev('throwin', T, at, { p: thrower.id, z: zT, y: edge })];
+  }
+
   // carry on: pass or dribble
   const carrier = SA.lineup.find((p) => p.id === st.carrier && p.on) || pickNear(SA, A, rng, z, st.y, { gkOK: true });
   const y2 = clamp(st.y + rand(rng, -0.25, 0.25), 0.06, 0.94);
@@ -126,6 +144,15 @@ export function genAction(st, rng, at) {
   const fwd = rng() < 0.72 + (fxA.dz - 1) * 0.15;
   const nz = clamp(z + (fwd ? rand(rng, 0.05, 0.2) * fxA.dz : -rand(rng, 0.02, 0.1)), 0.03, 0.98);
   const rcv = pickNear(SA, A, rng, nz, y2, { exclude: carrier.id, skill: 'pas' });
+  // offside: a forward ball to an attacker beyond the last defender. Free kick to the defending side.
+  if (fwd && nz > 0.6 && rcv.sg !== 'DEF') {
+    const pOff = clamp(0.085 * fxA.dz * (1 + fxB.press * 0.3) * (rcv.sg === 'ATT' ? 1.25 : 0.55), 0, 0.2);
+    if (rng() < pOff) {
+      const zB = clamp(1 - nz + rand(rng, -0.02, 0.05), 0.04, 0.5);
+      const taker = pickNear(SB, B, rng, zB, y2, { gkOK: true });
+      return [ev('offside', A, at, { p: rcv.id, q: carrier.id, x: taker.id, z: zB, y: y2 })];
+    }
+  }
   return [ev('pass', A, at, { p: carrier.id, q: rcv.id, z: nz, y: y2 })];
 }
 
@@ -191,7 +218,7 @@ export function finalStats(st, rng) {
     const share = s.poss / tot;
     out[t] = {
       possession: Math.round(share * 100), shots: s.shots, sot: s.sot, passes: Math.round(s.passes * 4 + share * 60 + rng() * 25),
-      fouls: s.fouls, penalties: s.pens, corners: s.corners, xg: Math.round(s.xg * 100) / 100, yellow: s.yellow, red: s.red,
+      fouls: s.fouls, penalties: s.pens, corners: s.corners, offsides: s.offsides, throwIns: s.throwins, xg: Math.round(s.xg * 100) / 100, yellow: s.yellow, red: s.red,
     };
   }
   out.a.possession = 100 - out.h.possession;
