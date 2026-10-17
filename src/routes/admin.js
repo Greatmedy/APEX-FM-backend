@@ -7,8 +7,6 @@ import { freeSlots } from '../services/clubs.js';
 import { getRunner, runnerCount } from '../sim/runner.js';
 import { getWhatsapp } from './home.js';
 import { fxOut } from './league.js';
-import { adminAds } from './ads.js';
-import { tierList } from '../services/clubs.js';
 
 const r = Router();
 r.use(auth, admin);

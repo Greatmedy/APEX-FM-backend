@@ -19,8 +19,6 @@ import clubs, { tacticsRouter } from './routes/clubs.js';
 import matches from './routes/matches.js';
 import home, { publicRouter as publicHome } from './routes/home.js';
 import adminRoutes from './routes/admin.js';
-import { publicAds } from './routes/ads.js';
-import pushRoutes from './routes/push.js';
 
 const app = express();
 const server = http.createServer(app);
@@ -34,8 +32,6 @@ app.use(express.json({ limit: '200kb' }));
 
 app.get('/', (req, res) => res.json({ name: 'APEX FM 2027 API', ok: true }));
 app.get('/api/health', (req, res) => res.json({ ok: true, time: Date.now() }));
-app.use('/api/ads', publicAds);
-app.use('/api/push', pushRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/templates', templates);
 app.use('/api', publicHome);

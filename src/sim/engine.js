@@ -134,33 +134,6 @@ export function genAction(st, rng, at) {
   const pShot = z < 0.55 ? 0.004 : (0.07 + 0.3 * clamp((z - 0.55) / 0.4, 0, 1)) * fxA.shot * clamp(1 + (rA.atk - rB.def) * 0.006, 0.7, 1.4);
   if (rng() < pShot) return shotChain(st, rng, A, at);
 
-  // corner kick just taken: the delivery, then a header at goal, a clearance, or the keeper claims it
-  if (st.lastEv && st.lastEv.k === 'corner' && st.lastEv.t === A) {
-    const taker = SA.lineup.find((p) => p.id === st.carrier && p.on) || pickNear(SA, A, rng, 0.5, 0.5, { roleW: { MID: 1, ATT: 0.5, DEF: 0.1 }, skill: 'pas' });
-    const target = weighted(rng, onPitch(SA).filter((p) => p.id !== taker.id && p.sg !== 'GK'), (p) => 0.2 + (p.sg === 'DEF' ? 0.9 : p.sg === 'ATT' ? 1 : 0.35) * (p.a.phy / 70));
-    const ty = clamp(0.5 + rand(rng, -0.12, 0.12), 0.3, 0.7);
-    const cross = ev('pass', A, at, { p: taker.id, q: target.id, z: 0.94, y: ty, cr: 1 });
-    const r = rng();
-    if (r < 0.5) return [cross, ...shotChain(st, rng, A, at + 4, { shooter: target, head: true, assistId: taker.id })];
-    if (r < 0.82) {
-      const clr = pickNear(SB, B, rng, 0.06, 0.5, { roleW: { DEF: 1, MID: 0.3, ATT: 0 }, skill: 'def' });
-      return [cross, ev('interception', B, at + 4, { p: clr.id, q: target.id, z: clamp(0.18 + rand(rng, 0, 0.2), 0.1, 0.45), y: clamp(ty + rand(rng, -0.25, 0.25), 0.1, 0.9), cl: 1 })];
-    }
-    return [cross, ev('interception', B, at + 4, { p: gkOf(SB).id, q: target.id, z: 0.07, y: 0.5, cl: 1, gk: 1 })];
-  }
-
-  // ball out of play for a throw-in (touchline). Awarded to the side that did not touch it last, mostly.
-  if (rng() < 0.1) {
-    const toB = rng() < 0.62, T = toB ? B : A, ST = st.sides[T];
-    const zT = clamp((toB ? 1 - z : z) + rand(rng, -0.04, 0.04), 0.06, 0.94);
-    const edge = st.y < 0.5 ? 0 : 1;
-    const thrower = weighted(rng, onPitch(ST).filter((p) => p.sg !== 'GK'), (p) => {
-      const py = T === 'h' ? p.sy : 1 - p.sy;
-      return 0.03 + gauss(py - edge, 0.3) * gauss(p.sx - zT, 0.3);
-    });
-    return [ev('throwin', T, at, { p: thrower.id, z: zT, y: edge })];
-  }
-
   // carry on: pass or dribble
   const carrier = SA.lineup.find((p) => p.id === st.carrier && p.on) || pickNear(SA, A, rng, z, st.y, { gkOK: true });
   const y2 = clamp(st.y + rand(rng, -0.25, 0.25), 0.06, 0.94);
