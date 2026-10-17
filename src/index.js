@@ -19,6 +19,7 @@ import clubs, { tacticsRouter } from './routes/clubs.js';
 import matches from './routes/matches.js';
 import home, { publicRouter as publicHome } from './routes/home.js';
 import adminRoutes from './routes/admin.js';
+import { publicAds } from './routes/ads.js';
 
 const app = express();
 const server = http.createServer(app);
@@ -42,6 +43,7 @@ app.use('/api/tactics', tacticsRouter);
 app.use('/api/matches', matches);
 app.use('/api', home);
 app.use('/api/admin', adminRoutes);
+app.use('/api/ads', publicAds);
 app.use('/api', (req, res) => res.status(404).json({ error: 'Route not found.' }));
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
