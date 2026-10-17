@@ -7,14 +7,17 @@ import { freeSlots } from '../services/clubs.js';
 import { getRunner, runnerCount } from '../sim/runner.js';
 import { getWhatsapp } from './home.js';
 import { fxOut } from './league.js';
+import { adminAds } from './ads.js';
+import { tierList } from '../services/clubs.js';
 
 const r = Router();
 r.use(auth, admin);
+r.use('/ads', adminAds);
 
 r.get('/overview', wrap(async (req, res) => {
   const season = await currentSeason();
   const slots = [];
-  for (const tier of [1, 2]) {
+  for (const tier of await tierList()) {
     const humans = await Club.countDocuments({ leagueTier: tier, isAI: false });
     slots.push({ tier, humans, ai: await Club.countDocuments({ leagueTier: tier, isAI: true }), free: await freeSlots(tier) });
   }

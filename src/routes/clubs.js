@@ -27,7 +27,7 @@ async function summary(club) {
 r.get('/me', needClub, wrap(async (req, res) => {
   const club = req.club;
   const s = await summary(club);
-  res.json({ club: { ...clubBrief(club), tier: club.leagueTier, fans: club.fans, seasonForm: club.seasonForm, tactics: club.tactics, stadiumName: club.stadiumName, name: club.name }, ...s });
+  res.json({ club: { ...clubBrief(club), titles: club.titles || [], tier: club.leagueTier, fans: club.fans, seasonForm: club.seasonForm, tactics: club.tactics, stadiumName: club.stadiumName, name: club.name }, ...s });
 }));
 
 r.put('/me/identity', needClub, wrap(async (req, res) => {

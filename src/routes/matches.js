@@ -7,6 +7,8 @@ import { getRunner } from '../sim/runner.js';
 import { getIO } from '../services/notify.js';
 import { currentSeason } from '../services/seasons.js';
 import { fxOut } from './league.js';
+import { AdLineup } from '../models/index.js';
+import { brandsOut } from './ads.js';
 
 const r = Router();
 r.use(auth);
@@ -43,6 +45,14 @@ r.get('/:id', wrap(async (req, res) => {
   }
   if (fx.status === 'finished') { out.stats = fx.stats; out.goals = fx.goals; out.cards = fx.cards; out.hasReplay = !!fx.setup; }
   res.json(out);
+}));
+
+/** Sponsor boards for this fixture's matchday (frozen once the matchday starts). Rotation itself is client-side. */
+r.get('/:id/ads', wrap(async (req, res) => {
+  if (!/^[a-f\d]{24}$/i.test(req.params.id)) return res.json({ brands: [] });
+  const fx = await Fixture.findById(req.params.id).select('season gameweek').lean();
+  if (!fx) return res.status(404).json({ error: 'Match not found.' });
+  res.json({ brands: brandsOut(await AdLineup.findOne({ season: fx.season, gameweek: fx.gameweek }).lean()) });
 }));
 
 r.post('/:id/ready', wrap(async (req, res) => {

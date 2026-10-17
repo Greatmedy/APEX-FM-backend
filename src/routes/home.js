@@ -3,7 +3,7 @@ import { auth, needClub, wrap } from '../middleware/auth.js';
 import { Fixture, Notification, Post, Setting, Club } from '../models/index.js';
 import { getTable } from '../services/standings.js';
 import { currentSeason } from '../services/seasons.js';
-import { tierName } from '../services/clubs.js';
+import { tierName, tierList } from '../services/clubs.js';
 import { config } from '../config.js';
 import { fxOut, clubBrief } from './league.js';
 
@@ -30,7 +30,8 @@ r.get('/home', needClub, wrap(async (req, res) => {
   const unread = await Notification.countDocuments({ user: req.user._id, readAt: null });
   const now = Date.now();
   res.json({
-    club: { ...clubBrief(club), fans: club.fans, seasonForm: club.seasonForm, tier: club.leagueTier, league: tierName(club.leagueTier) },
+    maxTier: Math.max(...(await tierList())),
+    club: { ...clubBrief(club), titles: club.titles || [], fans: club.fans, seasonForm: club.seasonForm, tier: club.leagueTier, league: tierName(club.leagueTier) },
     rank, season: { number: season.number, startsAt: season.startsAt, endsAt: season.endsAt, breakUntil: season.breakUntil, phase: now < season.startsAt.getTime() ? (season.number > 1 ? 'offseason' : 'preseason') : 'active' },
     table: table.map((x) => ({ pos: x.pos, club: clubBrief(x.club), played: x.played, won: x.won, drawn: x.drawn, lost: x.lost, gf: x.gf, ga: x.ga, gd: x.gd, pts: x.pts })),
     last: done.length ? fxOut(done[done.length - 1]) : null, next: next ? fxOut(next) : null, unread, whatsappLink: await getWhatsapp(), serverNow: now,
