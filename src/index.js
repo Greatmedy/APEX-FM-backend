@@ -46,6 +46,7 @@ app.use('/api/tactics', tacticsRouter);
 app.use('/api/matches', matches);
 app.use('/api', home);
 app.use('/api/admin', adminRoutes);
+app.use('/api/ads', publicAds);
 app.use('/api', (req, res) => res.status(404).json({ error: 'Route not found.' }));
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
