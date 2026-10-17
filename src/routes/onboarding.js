@@ -2,7 +2,9 @@ import { Router } from 'express';
 import { auth, wrap } from '../middleware/auth.js';
 import { CLUB_BY_KEY, SIGNUP_CLUBS, LEAGUES } from '../data/clubs.js';
 import { templateMeta, templateSquad } from '../lib/playerGen.js';
-import { freeSlots, claimSlot, tierName } from '../services/clubs.js';
+import { freeSlots, claimSlot, tierName, tierList, nextTierToOpen } from '../services/clubs.js';
+import { openNextTier } from '../services/seasons.js';
+import { MAX_TIERS, TIER_SIZE } from '../config.js';
 import { User } from '../models/index.js';
 import { userOut } from './auth.js';
 
@@ -22,8 +24,11 @@ publicRouter.get('/:key', (req, res) => {
 router.use(auth);
 router.get('/leagues', wrap(async (req, res) => {
   const out = [];
-  for (const tier of [1, 2]) out.push({ tier, name: tierName(tier), free: await freeSlots(tier) });
-  res.json({ leagues: out });
+  for (const tier of await tierList()) out.push({ tier, name: tierName(tier), free: await freeSlots(tier) });
+  // every division is full of managers: the next one opens as soon as someone joins it (up to APEX League 5)
+  const next = await nextTierToOpen();
+  if (next) out.push({ tier: next, name: tierName(next), free: TIER_SIZE, isNew: true });
+  res.json({ leagues: out, max: MAX_TIERS });
 }));
 router.post('/club', wrap(async (req, res) => {
   const u = req.user;
@@ -53,11 +58,15 @@ router.post('/league', wrap(async (req, res) => {
   if (u.clubId) return res.status(409).json({ error: 'You already manage a club.' });
   if (!['league', 'waitlist'].includes(u.onboarding.step) || !u.managerName) return res.status(409).json({ error: 'Finish the earlier steps first.' });
   const tier = Number(req.body?.tier);
-  if (![1, 2].includes(tier)) return res.status(400).json({ error: 'Choose APEX League 1 or APEX League 2.' });
-  const club = await claimSlot(tier, u);
+  const tiers = await tierList();
+  if (!Number.isInteger(tier) || tier < 1 || tier > MAX_TIERS) return res.status(400).json({ error: 'Choose one of the listed leagues.' });
+  let club = null;
+  if (tiers.includes(tier)) club = await claimSlot(tier, u);
+  else if (tier === (await nextTierToOpen())) { await openNextTier(); club = await claimSlot(tier, u); }
+  else return res.status(409).json({ error: `${tierName(tier)} is not open yet. It opens when the divisions above it are full.`, full: true });
   if (!club) {
-    const other = await freeSlots(tier === 1 ? 2 : 1);
-    if (other > 0) return res.status(409).json({ error: `${tierName(tier)} is full. Pick ${tierName(tier === 1 ? 2 : 1)} instead.`, full: true });
+    for (const t of await tierList()) { if (t !== tier && (await freeSlots(t)) > 0) return res.status(409).json({ error: `${tierName(tier)} is full. Pick ${tierName(t)} instead.`, full: true }); }
+    if (await nextTierToOpen()) return res.status(409).json({ error: 'Every league is full. A new division is available: choose it from the list.', full: true });
     u.onboarding.step = 'waitlist'; u.onboarding.waitTier = tier;
     await u.save();
     return res.json({ waitlisted: true, user: userOut(u) });

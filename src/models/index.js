@@ -26,7 +26,7 @@ const ClubSchema = new Schema({
   name: String,
   displayName: String,
   short: String,
-  leagueTier: { type: Number, enum: [1, 2], index: true },
+  leagueTier: { type: Number, min: 1, max: 5, index: true },
   isAI: { type: Boolean, default: true, index: true },
   manager: { type: ObjectId, ref: 'User', default: null },
   managerName: String,
@@ -36,6 +36,7 @@ const ClubSchema = new Schema({
   fans: { type: Number, default: 10000 },
   seasonForm: [String],
   forfeited: { type: Boolean, default: false },
+  titles: [{ _id: false, season: Number, tier: Number }],
   tactics: {
     formation: { type: String, default: '4-3-3' },
     style: { type: String, default: 'balanced' },
@@ -98,6 +99,16 @@ NotificationSchema.index({ user: 1, dedupeKey: 1 }, { unique: true, sparse: true
 const PostSchema = new Schema({ user: ObjectId, author: String, clubName: String, text: String }, { timestamps: true });
 const SettingSchema = new Schema({ key: { type: String, unique: true }, value: String });
 
+// Pitch-side advertising (3D match boards). Images live in their own collection, never in match events.
+const AdImageSchema = new Schema({ season: Number, gameweek: Number, contentType: String, size: Number, data: Buffer }, { timestamps: true });
+AdImageSchema.index({ season: 1, gameweek: 1 });
+const AdLineupSchema = new Schema({
+  season: Number, gameweek: Number,
+  brands: [{ _id: false, name: String, image: { type: ObjectId, ref: 'AdImage' } }],
+}, { timestamps: true });
+AdLineupSchema.index({ season: 1, gameweek: 1 }, { unique: true });
+
+const PushSubSchema = new Schema({ user: { type: ObjectId, ref: 'User', index: true }, endpoint: { type: String, unique: true }, keys: { p256dh: String, auth: String }, ua: String }, { timestamps: true });
 export const User = model('User', UserSchema);
 export const Club = model('Club', ClubSchema);
 export const Player = model('Player', PlayerSchema);
@@ -107,3 +118,6 @@ export const Season = model('Season', SeasonSchema);
 export const Notification = model('Notification', NotificationSchema);
 export const Post = model('Post', PostSchema);
 export const Setting = model('Setting', SettingSchema);
+export const AdImage = model('AdImage', AdImageSchema);
+export const AdLineup = model('AdLineup', AdLineupSchema);
+export const PushSub = model('PushSub', PushSubSchema);

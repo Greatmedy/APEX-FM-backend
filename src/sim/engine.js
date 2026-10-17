@@ -18,7 +18,7 @@ function pickNear(S, t, rng, zSelf, yAbs, { exclude, gkOK = false, roleW = { DEF
 }
 const gkOf = (S) => S.lineup.find((p) => p.on && p.sg === 'GK') || onPitch(S)[0];
 
-function shotChain(st, rng, A, at, { pen = false, shooter } = {}) {
+function shotChain(st, rng, A, at, { pen = false, shooter, fk = false, head = false, assistId } = {}) {
   const B = opp(A), SA = st.sides[A], SB = st.sides[B];
   const rA = teamRatings(SA), rB = teamRatings(SB);
   const z = pen ? 0.89 : st.z;
@@ -28,10 +28,10 @@ function shotChain(st, rng, A, at, { pen = false, shooter } = {}) {
     shooter = rcv && rng() < 0.6 ? rcv : pickNear(SA, A, rng, z, st.y, { roleW: { DEF: 0.1, MID: 0.45, ATT: 1 }, skill: 'sho' });
   }
   const lp = st.lastPass;
-  const assist = !pen && lp && lp.t === A && lp.q === shooter.id && rng() < 0.82 ? lp.p : null;
+  const assist = assistId !== undefined ? assistId : !pen && lp && lp.t === A && lp.q === shooter.id && rng() < 0.82 ? lp.p : null;
   const sho = shooter.a.sho * shooter.f0 * (0.85 + 0.15 * shooter.e / 100);
   const dz = clamp((z - 0.6) / 0.4, 0, 1);
-  const xg = pen ? 0.76 : 0.015 + 0.115 * Math.pow(dz, 1.5);
+  const xg = pen ? 0.76 : fk ? 0.07 : head ? 0.1 : 0.015 + 0.115 * Math.pow(dz, 1.5);
   const sf = clamp(1 + (sho - 72) / 70, 0.7, 1.4);
   const gf = clamp(1 - (rB.gk - 72) / 120, 0.8, 1.25);
   const df = clamp(1 + (rA.atk - rB.def) * 0.008, 0.78, 1.25);
@@ -39,7 +39,7 @@ function shotChain(st, rng, A, at, { pen = false, shooter } = {}) {
   const pOT = pen ? 0.92 : clamp(0.38 + (sho - 72) * 0.004, 0.26, 0.56);
   const evs = [];
   const yT = clamp(0.5 + rand(rng, -0.09, 0.09), 0.4, 0.6);
-  evs.push(ev('shot', A, at, { p: shooter.id, z: 1, y: yT, xg: Math.round(xg * 100) / 100, pen: pen || undefined }));
+  evs.push(ev('shot', A, at, { p: shooter.id, z: 1, y: yT, xg: Math.round(xg * 100) / 100, pen: pen || undefined, fk: fk || undefined, hd: head || undefined }));
   const r = rng();
   const gk = gkOf(SB);
   const t2 = at + 8;
@@ -54,7 +54,7 @@ function shotChain(st, rng, A, at, { pen = false, shooter } = {}) {
       evs.push(ev('corner', A, t2 + 14, { p: taker.id, z: 0.985, y: rng() < 0.5 ? 0.02 : 0.98 }));
     }
   } else {
-    const blocked = !pen && rng() < 0.4;
+    const blocked = !pen && rng() < (fk ? 0.42 : 0.4); // a free kick is often stopped by the wall
     if (blocked) {
       const blk = pickNear(SB, B, rng, 0.12, st.y, { roleW: { DEF: 1, MID: 0.3, ATT: 0.05 } });
       evs.push(ev('miss', A, t2, { p: shooter.id, q: blk.id, bl: 1, z: 0.93, y: clamp(st.y + rand(rng, -0.15, 0.15), 0.1, 0.9) }));
@@ -66,15 +66,21 @@ function shotChain(st, rng, A, at, { pen = false, shooter } = {}) {
       evs.push(ev('goalkick', B, t2 + 14, { p: gk.id, z: 0.06, y: 0.5 }));
     }
   }
+  // Presentation hint for renderers: the outcome the following events will confirm. Consumes no RNG.
+  const out = evs.find((e) => ['goal', 'save', 'miss'].includes(e.k));
+  if (out) {
+    evs[0].o = out.k === 'miss' ? (out.bl ? 'block' : out.post ? 'post' : 'miss') : out.k;
+    if (out.k === 'miss') evs[0].ty = out.y;
+  }
   return evs;
 }
 
-function foulCard(st, rng, B, fouler, at, pen) {
+function foulCard(st, rng, B, fouler, at, pen, slide = false) {
   const S = st.sides[B];
   const evs = [];
   const pl = S.lineup.find((p) => p.id === fouler.id);
   const r = rng();
-  const yp = ((pen ? 0.26 : 0.14) * (pl && pl.y >= 1 ? 0.45 : 1)) + STYLE_FX[S.style].press * 0.05;
+  const yp = ((pen ? 0.26 : 0.14) * (pl && pl.y >= 1 ? 0.45 : 1)) + STYLE_FX[S.style].press * 0.05 + (slide ? 0.1 : 0);
   if (r < 0.004) evs.push(ev('red', B, at, { p: fouler.id, why: 'straight' }));
   else if (r < 0.004 + yp) {
     evs.push(ev('yellow', B, at, { p: fouler.id, second: pl && pl.y >= 1 ? 1 : undefined }));
@@ -90,7 +96,7 @@ export function genAction(st, rng, at) {
   const rA = teamRatings(SA), rB = teamRatings(SB);
   const fxA = STYLE_FX[SA.style], fxB = STYLE_FX[SB.style];
   const z = st.z;
-  const pFoul = 0.065 + fxB.press * 0.015;
+  const pFoul = 0.045 + fxB.press * 0.012; // referees whistle only for genuinely hard challenges
   const pLoss = clamp(0.21 + (rB.ctrl - rA.ctrl) * 0.005 + (z > 0.7 ? 0.04 : 0) - fxA.hold + fxB.press * 0.03, 0.09, 0.42);
   const roll = rng();
 
@@ -98,12 +104,22 @@ export function genAction(st, rng, at) {
     const fouler = pickNear(SB, B, rng, 1 - z, st.y, { roleW: { DEF: 1, MID: 1, ATT: 0.3 } });
     const victim = SA.lineup.find((p) => p.id === st.carrier && p.on) || pickNear(SA, A, rng, z, st.y);
     const pen = z > 0.84 && rng() < 0.38;
-    const evs = [ev('foul', B, at, { p: fouler.id, q: victim.id, z, y: st.y })];
-    evs.push(...foulCard(st, rng, B, fouler, at + 3, pen));
+    const slide = rng() < 0.38; // a hard sliding challenge rather than a hard standing one
+    const evs = [ev('foul', B, at, { p: fouler.id, q: victim.id, z, y: st.y, hard: 1, sl: slide || undefined })];
+    const cards = foulCard(st, rng, B, fouler, at + 3, pen, slide);
+    evs.push(...cards);
+    if (!cards.length && rng() < 0.55) evs[0].warn = 1; // no card: the referee has a word instead
     if (pen) {
       evs.push(ev('pen', A, at + 9, { p: victim.id, z: 0.89, y: 0.5 }));
       const taker = onPitch(SA).filter((p) => p.sg !== 'GK').sort((a, b) => b.a.sho - a.a.sho)[0];
       evs.push(...shotChain(st, rng, A, at + 15, { pen: true, shooter: taker }));
+    } else if (!cards.some((c) => c.k === 'red')) {
+      // direct free kick from where the foul happened: the wall is set, then it is struck at goal or played on
+      const inRange = z >= 0.68 && z <= 0.92 && Math.abs(st.y - 0.5) < 0.3;
+      const pool = onPitch(SA).filter((p) => p.sg !== 'GK');
+      const taker = [...pool].sort((a, b) => (inRange ? b.a.sho - a.a.sho : b.a.pas - a.a.pas))[0] || victim;
+      evs.push(ev('freekick', A, at + 8, { p: taker.id, z, y: st.y, wall: inRange || undefined }));
+      if (inRange && rng() < 0.55) evs.push(...shotChain(st, rng, A, at + 15, { shooter: taker, fk: true, assistId: null }));
     }
     return evs;
   }
@@ -111,10 +127,39 @@ export function genAction(st, rng, at) {
     const nz = clamp(1 - z + rand(rng, -0.05, 0.1), 0.05, 0.95);
     const def = pickNear(SB, B, rng, 1 - z, st.y, { roleW: { DEF: 1, MID: 0.8, ATT: 0.15 }, skill: 'def' });
     const kind = rng() < 0.5 ? 'tackle' : 'interception';
-    return [ev(kind, B, at, { p: def.id, q: st.carrier, z: nz, y: clamp(st.y + rand(rng, -0.12, 0.12), 0.08, 0.92) })];
+    const e = ev(kind, B, at, { p: def.id, q: st.carrier, z: nz, y: clamp(st.y + rand(rng, -0.12, 0.12), 0.08, 0.92) });
+    if (kind === 'tackle' && rng() < 0.22) e.sl = 1; // a clean sliding tackle that wins the ball
+    return [e];
   }
   const pShot = z < 0.55 ? 0.004 : (0.07 + 0.3 * clamp((z - 0.55) / 0.4, 0, 1)) * fxA.shot * clamp(1 + (rA.atk - rB.def) * 0.006, 0.7, 1.4);
   if (rng() < pShot) return shotChain(st, rng, A, at);
+
+  // corner kick just taken: the delivery, then a header at goal, a clearance, or the keeper claims it
+  if (st.lastEv && st.lastEv.k === 'corner' && st.lastEv.t === A) {
+    const taker = SA.lineup.find((p) => p.id === st.carrier && p.on) || pickNear(SA, A, rng, 0.5, 0.5, { roleW: { MID: 1, ATT: 0.5, DEF: 0.1 }, skill: 'pas' });
+    const target = weighted(rng, onPitch(SA).filter((p) => p.id !== taker.id && p.sg !== 'GK'), (p) => 0.2 + (p.sg === 'DEF' ? 0.9 : p.sg === 'ATT' ? 1 : 0.35) * (p.a.phy / 70));
+    const ty = clamp(0.5 + rand(rng, -0.12, 0.12), 0.3, 0.7);
+    const cross = ev('pass', A, at, { p: taker.id, q: target.id, z: 0.94, y: ty, cr: 1 });
+    const r = rng();
+    if (r < 0.5) return [cross, ...shotChain(st, rng, A, at + 4, { shooter: target, head: true, assistId: taker.id })];
+    if (r < 0.82) {
+      const clr = pickNear(SB, B, rng, 0.06, 0.5, { roleW: { DEF: 1, MID: 0.3, ATT: 0 }, skill: 'def' });
+      return [cross, ev('interception', B, at + 4, { p: clr.id, q: target.id, z: clamp(0.18 + rand(rng, 0, 0.2), 0.1, 0.45), y: clamp(ty + rand(rng, -0.25, 0.25), 0.1, 0.9), cl: 1 })];
+    }
+    return [cross, ev('interception', B, at + 4, { p: gkOf(SB).id, q: target.id, z: 0.07, y: 0.5, cl: 1, gk: 1 })];
+  }
+
+  // ball out of play for a throw-in (touchline). Awarded to the side that did not touch it last, mostly.
+  if (rng() < 0.1) {
+    const toB = rng() < 0.62, T = toB ? B : A, ST = st.sides[T];
+    const zT = clamp((toB ? 1 - z : z) + rand(rng, -0.04, 0.04), 0.06, 0.94);
+    const edge = st.y < 0.5 ? 0 : 1;
+    const thrower = weighted(rng, onPitch(ST).filter((p) => p.sg !== 'GK'), (p) => {
+      const py = T === 'h' ? p.sy : 1 - p.sy;
+      return 0.03 + gauss(py - edge, 0.3) * gauss(p.sx - zT, 0.3);
+    });
+    return [ev('throwin', T, at, { p: thrower.id, z: zT, y: edge })];
+  }
 
   // carry on: pass or dribble
   const carrier = SA.lineup.find((p) => p.id === st.carrier && p.on) || pickNear(SA, A, rng, z, st.y, { gkOK: true });
@@ -126,6 +171,15 @@ export function genAction(st, rng, at) {
   const fwd = rng() < 0.72 + (fxA.dz - 1) * 0.15;
   const nz = clamp(z + (fwd ? rand(rng, 0.05, 0.2) * fxA.dz : -rand(rng, 0.02, 0.1)), 0.03, 0.98);
   const rcv = pickNear(SA, A, rng, nz, y2, { exclude: carrier.id, skill: 'pas' });
+  // offside: a forward ball to an attacker beyond the last defender. Free kick to the defending side.
+  if (fwd && nz > 0.6 && rcv.sg !== 'DEF') {
+    const pOff = clamp(0.085 * fxA.dz * (1 + fxB.press * 0.3) * (rcv.sg === 'ATT' ? 1.25 : 0.55), 0, 0.2);
+    if (rng() < pOff) {
+      const zB = clamp(1 - nz + rand(rng, -0.02, 0.05), 0.04, 0.5);
+      const taker = pickNear(SB, B, rng, zB, y2, { gkOK: true });
+      return [ev('offside', A, at, { p: rcv.id, q: carrier.id, x: taker.id, z: zB, y: y2 })];
+    }
+  }
   return [ev('pass', A, at, { p: carrier.id, q: rcv.id, z: nz, y: y2 })];
 }
 
@@ -191,7 +245,7 @@ export function finalStats(st, rng) {
     const share = s.poss / tot;
     out[t] = {
       possession: Math.round(share * 100), shots: s.shots, sot: s.sot, passes: Math.round(s.passes * 4 + share * 60 + rng() * 25),
-      fouls: s.fouls, penalties: s.pens, corners: s.corners, xg: Math.round(s.xg * 100) / 100, yellow: s.yellow, red: s.red,
+      fouls: s.fouls, penalties: s.pens, corners: s.corners, offsides: s.offsides, throwIns: s.throwins, xg: Math.round(s.xg * 100) / 100, yellow: s.yellow, red: s.red,
     };
   }
   out.a.possession = 100 - out.h.possession;

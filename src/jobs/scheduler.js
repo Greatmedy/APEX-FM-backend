@@ -28,7 +28,7 @@ async function notificationsJob() {
       if (!c?.manager) continue;
       const opp = await Club.findById(theirs).select('displayName').lean();
       await notify(c.manager, { type: 'upcoming', title: `Upcoming: ${opp.displayName}`, body: `Gameweek ${f.gameweek} kicks off at 20:00 WAT.`, link: `/match/${f._id}`, dedupeKey: `up:${f._id}` });
-      if (when <= READY_WINDOW_MS) await notify(c.manager, { type: 'ready', title: 'Ready window is open', body: `Tap Ready for ${opp.displayName}. Kickoff is in under 10 minutes.`, link: `/match/${f._id}`, dedupeKey: `ready:${f._id}` });
+      if (when <= READY_WINDOW_MS) await notify(c.manager, { type: 'ready', title: 'Set up your team and click Ready', body: `${opp.displayName} · kickoff at 8:00 PM. Check your lineup and tactics, then tap Ready.`, link: `/match/${f._id}`, dedupeKey: `ready:${f._id}` });
     }
   }
 }

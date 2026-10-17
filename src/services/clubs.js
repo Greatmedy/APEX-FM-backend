@@ -5,7 +5,21 @@ import { autoPick } from '../lib/formations.js';
 import { rngFrom, shuffle, pick } from '../lib/rng.js';
 import { STYLES } from '../lib/formations.js';
 
-export const tierName = (t) => (t === 1 ? 'APEX League 1' : 'APEX League 2');
+
+import { MAX_TIERS, TIER_SIZE } from '../config.js';
+
+export const tierName = (t) => `APEX League ${t}`;
+/** Existing divisions, top first. */
+export async function tierList() { return (await Club.distinct('leagueTier')).sort((a, b) => a - b); }
+/** True when no AI club is left in the division, i.e. every place is taken by a human manager. */
+export const humansFull = async (tier) => (await Club.countDocuments({ leagueTier: tier, isAI: true })) === 0;
+/** The next division that may be opened right now (every existing division is full of humans), or null. */
+export async function nextTierToOpen() {
+  const tiers = await tierList();
+  if (!tiers.length || tiers.length >= MAX_TIERS) return null;
+  for (const t of tiers) if (!(await humansFull(t))) return null;
+  return tiers[tiers.length - 1] + 1;
+}
 
 export async function cloneSquad(club, key) {
   await Player.deleteMany({ club: club._id });
@@ -29,7 +43,7 @@ export function applyTemplate(club, key, managerName) {
 }
 
 /** Create the 20 APEX AI clubs for a tier (distinct templates inside the league). */
-export async function createAIClubs(tier, count = 20) {
+export async function createAIClubs(tier, count = TIER_SIZE) {
   const keys = shuffle(rngFrom('apex-ai-' + tier), ALL_KEYS).slice(0, count);
   for (const key of keys) {
     const club = new Club({ leagueTier: tier, isAI: true, fans: 10000 });
