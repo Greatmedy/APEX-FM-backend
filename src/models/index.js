@@ -151,7 +151,7 @@ const WhotTableSchema = new Schema({
   state: { type: String, enum: ['WAITING', 'PLAY', 'FINISHED'], default: 'WAITING', index: true },
   market: [{ _id: false, num: Number, shape: String, id: String }],
   playPile: [{ _id: false, num: Number, shape: String, id: String }],
-  players: [{ user: { type: ObjectId, ref: 'User' }, hand: [{ _id: false, num: Number, shape: String, id: String }] }],
+  players: [{ user: { type: ObjectId, ref: 'User' }, ready: { type: Boolean, default: false }, hand: [{ _id: false, num: Number, shape: String, id: String }] }],
   turnIndex: { type: Number, default: 0 },
   turnStartedAt: Date,
   marketRule: { type: String, enum: ['end', 'reshuffle'], default: 'end' },
@@ -169,7 +169,7 @@ const LudoGameSchema = new Schema({
   state: { type: String, enum: ['WAITING', 'PLAY', 'FINISHED'], default: 'WAITING', index: true },
   players: [{
     user: { type: ObjectId, ref: 'User' }, color: { type: String, enum: ['red', 'yellow', 'green', 'blue'] },
-    tokens: { type: [Number], default: [-1, -1, -1, -1] },
+    tokens: { type: [Number], default: [-1, -1, -1, -1] }, ready: { type: Boolean, default: false },
   }],
   turnIndex: { type: Number, default: 0 },
   lastDie: Number, lastRoll: Schema.Types.Mixed, sixStreak: { type: Number, default: 0 },

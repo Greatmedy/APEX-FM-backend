@@ -29,17 +29,22 @@ function scheduleCleanup(room, kind) {
   setTimeout(async () => {
     if (kind === 'race') {
       const r = await Race.findById(room).lean();
-      if (r && r.participants.length === 0) { await Race.deleteOne({ _id: room }); races.delete(room); }
+      if (r && r.state === 'WALLOON' && r.participants.length <= 1) { await Race.deleteOne({ _id: room }); races.delete(room); }
     }
     if (kind === 'whot') {
       const t = await WhotTable.findById(room).lean();
-      if (t && t.players.length === 0) { await WhotTable.deleteOne({ _id: room }); whotTables.delete(room); }
+      if (t && t.state === 'WAITING' && t.players.length <= 1) { await WhotTable.deleteOne({ _id: room }); whotTables.delete(room); }
     }
     if (kind === 'ludo') {
       const g = await LudoGame.findById(room).lean();
-      if (g && g.players.length === 0) { await LudoGame.deleteOne({ _id: room }); ludoGames.delete(room); }
+      if (g && g.state === 'WAITING' && g.players.length <= 1) { await LudoGame.deleteOne({ _id: room }); ludoGames.delete(room); }
     }
   }, AUTO_CLEANUP_MS);
+}
+
+async function pruneStaleSoloRooms(Model, memberPath, state) {
+  const cutoff = new Date(Date.now() - AUTO_CLEANUP_MS);
+  await Model.deleteMany({ state, createdAt: { $lte: cutoff }, [`${memberPath}.1`]: { $exists: false } });
 }
 
 // ============================== HELPERS ==============================
@@ -93,7 +98,7 @@ export async function createRace({ hostId, venue, bet }) {
     participants: [{ user: hostId, ready: false, lapTimes: [] }],
   });
   races.set(String(race._id), { timer: null, countdown: null, lap: 0, startedAt: 0 });
-  scheduleCleanup(String(race._id), 'race', () => race.participants.length === 0);
+  scheduleCleanup(String(race._id), 'race');
   return race;
 }
 
@@ -143,6 +148,7 @@ export async function joinRace({ raceId, userId }) {
   if (!bal || bal.balance < amount) throw new Error('Insufficient virtual funds.');
   race.participants.push({ user: userId, ready: false, lapTimes: [] });
   await race.save();
+  emit(`race-${raceId}`, 'race-state', await racePublic(race));
   return race;
 }
 
@@ -164,6 +170,7 @@ export async function setRaceReady({ raceId, userId, ready }) {
   if (!p) throw new Error('You are not in this race.');
   p.ready = !!ready;
   await race.save();
+  emit(`race-${raceId}`, 'race-state', await racePublic(race));
   return race;
 }
 
@@ -256,6 +263,7 @@ export async function racePublic(race) {
 }
 
 export async function listRaces() {
+  await pruneStaleSoloRooms(Race, 'participants', 'WALLOON');
   const open = await Race.find({ state: { $in: ['WALLOON'] } }).sort({ createdAt: -1 }).limit(30).lean();
   return Promise.all(open.map(racePublic));
 }
@@ -281,9 +289,9 @@ export async function createWhotTable({ hostId, bet }) {
   const bal = await GameBalance.findOne({ user: hostId, game: WHOT_GAME });
   if (!bal || bal.balance < amount) throw new Error('Insufficient virtual funds.');
   const deck = buildDeck();
-  const table = await WhotTable.create({ host: hostId, bet: amount, deck: [], playPile: [], state: 'WAITING', market: deck, players: [{ user: hostId, hand: [] }] });
+  const table = await WhotTable.create({ host: hostId, bet: amount, deck: [], playPile: [], state: 'WAITING', market: deck, players: [{ user: hostId, hand: [], ready: false }] });
   whotTables.set(String(table._id), { timer: null });
-  scheduleCleanup(String(table._id), 'whot', () => table.players.length === 0);
+  scheduleCleanup(String(table._id), 'whot');
   return table;
 }
 
@@ -296,8 +304,9 @@ export async function joinWhotTable({ tableId, userId }) {
   const amount = table.bet;
   const bal = await GameBalance.findOne({ user: userId, game: WHOT_GAME });
   if (!bal || bal.balance < amount) throw new Error('Insufficient virtual funds.');
-  table.players.push({ user: userId, hand: [] });
+  table.players.push({ user: userId, hand: [], ready: false });
   await table.save();
+  emit(`whot-${tableId}`, 'whot-state', await whotPublic(table));
   return table;
 }
 
@@ -350,7 +359,20 @@ export async function startWhotTable({ tableId, userId }) {
   if (String(table.host) !== String(userId)) throw new Error('Only the host can start.');
   if (table.state !== 'WAITING') throw new Error('Table already started.');
   if (table.players.length < 2) throw new Error('Need at least 2 players.');
+  if (!table.players.every((p) => p.ready)) throw new Error('Every player must be ready.');
   await dealAndStart(table);
+  emit(`whot-${tableId}`, 'whot-state', await whotPublic(table));
+  return table;
+}
+
+export async function setWhotReady({ tableId, userId, ready }) {
+  const table = await WhotTable.findById(tableId);
+  if (!table) throw new Error('Table not found.');
+  if (table.state !== 'WAITING') throw new Error('Table is not waiting for players.');
+  const player = table.players.find((p) => String(p.user) === String(userId));
+  if (!player) throw new Error('You are not seated at this table.');
+  player.ready = !!ready;
+  await table.save();
   emit(`whot-${tableId}`, 'whot-state', await whotPublic(table));
   return table;
 }
@@ -462,7 +484,7 @@ function clearWhotTimer(table) {
 export async function whotPublic(table) {
   const top = table.playPile?.[table.playPile.length - 1] || null;
   const players = await Promise.all((table.players || []).map(async (p, i) => ({
-    user: String(p.user), name: (await userBrief(p.user)).username, handCount: (p.hand || []).length, isTurn: i === table.turnIndex,
+    user: String(p.user), name: (await userBrief(p.user)).username, ready: !!p.ready, handCount: (p.hand || []).length, isTurn: i === table.turnIndex,
   })));
   return {
     id: String(table._id), bet: table.bet, state: table.state, host: String(table.host),
@@ -485,6 +507,7 @@ export async function whotStateFor(userId, tableId) {
 }
 
 export async function listWhotTables() {
+  await pruneStaleSoloRooms(WhotTable, 'players', 'WAITING');
   const open = await WhotTable.find({ state: 'WAITING' }).sort({ createdAt: -1 }).limit(30).lean();
   return Promise.all(open.map(async (t) => ({
     id: String(t._id), bet: t.bet, host: String(t.host), players: t.players.length,
@@ -500,9 +523,9 @@ export async function createLudoGame({ hostId, bet = 0 }) {
   if (amount < 0 || amount > MAX_BET) throw new Error('Invalid entry amount.');
   const game = await LudoGame.create({
     host: hostId, bet: amount, state: 'WAITING',
-    players: [{ user: hostId, color: LUDO_COLORS[0], tokens: [-1, -1, -1, -1] }],
+    players: [{ user: hostId, color: LUDO_COLORS[0], tokens: [-1, -1, -1, -1], ready: false }],
   });
-  scheduleCleanup(String(game._id), 'ludo', () => game.players.length === 0);
+  scheduleCleanup(String(game._id), 'ludo');
   return game;
 }
 
@@ -515,8 +538,9 @@ export async function joinLudoGame({ gameId, userId }) {
   const used = game.players.map((p) => p.color);
   const color = LUDO_COLORS.find((c) => !used.includes(c));
   if (!color) throw new Error('No color available.');
-  game.players.push({ user: userId, color, tokens: [-1, -1, -1, -1] });
+  game.players.push({ user: userId, color, tokens: [-1, -1, -1, -1], ready: false });
   await game.save();
+  emit(`ludo-${gameId}`, 'ludo-state', await ludoPublic(game));
   return game;
 }
 
@@ -526,8 +550,21 @@ export async function startLudoGame({ gameId, userId }) {
   if (String(game.host) !== String(userId)) throw new Error('Only the host can start.');
   if (game.state !== 'WAITING') throw new Error('Game already started.');
   if (game.players.length < 2) throw new Error('Need at least 2 players.');
+  if (!game.players.every((p) => p.ready)) throw new Error('Every player must be ready.');
   game.state = 'PLAY';
   game.turnIndex = Math.floor(Math.random() * game.players.length);
+  await game.save();
+  emit(`ludo-${gameId}`, 'ludo-state', await ludoPublic(game));
+  return game;
+}
+
+export async function setLudoReady({ gameId, userId, ready }) {
+  const game = await LudoGame.findById(gameId);
+  if (!game) throw new Error('Game not found.');
+  if (game.state !== 'WAITING') throw new Error('Game is not waiting for players.');
+  const player = game.players.find((p) => String(p.user) === String(userId));
+  if (!player) throw new Error('You are not seated in this game.');
+  player.ready = !!ready;
   await game.save();
   emit(`ludo-${gameId}`, 'ludo-state', await ludoPublic(game));
   return game;
@@ -618,7 +655,7 @@ export async function moveLudoToken({ gameId, userId, tokenIndex }) {
 
 export async function ludoPublic(game) {
   const players = await Promise.all((game.players || []).map(async (p, i) => ({
-    user: String(p.user), name: (await userBrief(p.user)).username, color: p.color, tokens: p.tokens || [-1, -1, -1, -1], isTurn: i === game.turnIndex,
+    user: String(p.user), name: (await userBrief(p.user)).username, color: p.color, tokens: p.tokens || [-1, -1, -1, -1], ready: !!p.ready, isTurn: i === game.turnIndex,
   })));
   return {
     id: String(game._id), bet: game.bet, state: game.state, host: String(game.host),
@@ -634,6 +671,7 @@ export async function ludoStateFor(gameId) {
 }
 
 export async function listLudoGames() {
+  await pruneStaleSoloRooms(LudoGame, 'players', 'WAITING');
   const open = await LudoGame.find({ state: 'WAITING' }).sort({ createdAt: -1 }).limit(30).lean();
   return Promise.all(open.map(async (g) => ({
     id: String(g._id), bet: g.bet, host: String(g.host), players: g.players.length,

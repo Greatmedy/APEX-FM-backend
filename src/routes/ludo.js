@@ -2,7 +2,7 @@
 import { Router } from 'express';
 import { auth, wrap } from '../middleware/auth.js';
 import { getBalance, ledger, START_BALANCE } from '../services/gameLedger.js';
-import { createLudoGame, joinLudoGame, startLudoGame, rollLudoDie, moveLudoToken, ludoStateFor, listLudoGames } from '../services/gameEngine.js';
+import { createLudoGame, joinLudoGame, startLudoGame, setLudoReady, rollLudoDie, moveLudoToken, ludoStateFor, listLudoGames } from '../services/gameEngine.js';
 
 export const ludoRouter = Router();
 ludoRouter.use(auth);
@@ -32,6 +32,11 @@ ludoRouter.post('/games/:id/join', wrap(async (req, res) => {
 
 ludoRouter.post('/games/:id/start', wrap(async (req, res) => {
   const game = await startLudoGame({ gameId: req.params.id, userId: req.user._id });
+  res.json({ game: await ludoStateFor(String(game._id)) });
+}));
+
+ludoRouter.post('/games/:id/ready', wrap(async (req, res) => {
+  const game = await setLudoReady({ gameId: req.params.id, userId: req.user._id, ready: req.body?.ready === true });
   res.json({ game: await ludoStateFor(String(game._id)) });
 }));
 

@@ -2,7 +2,7 @@
 import { Router } from 'express';
 import { auth, wrap } from '../middleware/auth.js';
 import { getBalance, ledger, START_BALANCE } from '../services/gameLedger.js';
-import { createWhotTable, joinWhotTable, startWhotTable, playWhotCard, whotStateFor, listWhotTables, validateBet } from '../services/gameEngine.js';
+import { createWhotTable, joinWhotTable, startWhotTable, setWhotReady, playWhotCard, whotStateFor, listWhotTables, validateBet } from '../services/gameEngine.js';
 
 export const whotRouter = Router();
 whotRouter.use(auth);
@@ -32,6 +32,11 @@ whotRouter.post('/tables/:id/join', wrap(async (req, res) => {
 
 whotRouter.post('/tables/:id/start', wrap(async (req, res) => {
   const table = await startWhotTable({ tableId: req.params.id, userId: req.user._id });
+  res.json({ table: await whotStateFor(req.user._id, String(table._id)) });
+}));
+
+whotRouter.post('/tables/:id/ready', wrap(async (req, res) => {
+  const table = await setWhotReady({ tableId: req.params.id, userId: req.user._id, ready: req.body?.ready === true });
   res.json({ table: await whotStateFor(req.user._id, String(table._id)) });
 }));
 
