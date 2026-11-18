@@ -20,9 +20,9 @@ const AUTO_CLEANUP_MS = 60000; // 1 minute
 const AI_NAMES = ['AI Turbo', 'AI Nitro', 'AI Velocity', 'AI Phantom', 'AI Striker', 'AI Vortex', 'AI Inferno', 'AI Spectre'];
 const AI_CARS = ['Apex GT-R', 'Vortex', 'Phantom', 'Striker', 'Velocity', 'Inferno', 'Eclipse', 'Titan', 'Spectre', 'Hyperion', 'Nova', 'Venom'];
 
-const races = new Map(); // raceId -> in-memory state
-const whotTables = new Map(); // tableId -> { timer, turnDeadline }
-const ludoGames = new Map(); // gameId -> mem
+export const races = new Map(); // raceId -> in-memory state
+export const whotTables = new Map(); // tableId -> { timer, turnDeadline }
+export const ludoGames = new Map(); // gameId -> mem
 
 // Auto-cleanup: remove empty races/tables/games after 1 minute
 function scheduleCleanup(room, kind) {
@@ -65,6 +65,307 @@ const userBrief = async (id) => {
   const u = await User.findById(id).select('username usernameDisplay managerName').lean();
   return { id: String(id), username: u ? (u.usernameDisplay || u.username) : '?', managerName: u?.managerName || '' };
 };
+
+// ============================== APEX GT - REAL-TIME RACE PHYSICS ==============================
+// Track definitions - each venue has a spline path with checkpoints
+const TRACKS = {
+  lekki: { name: 'Lekki–Ajah Expressway', length: 3200, checkpoints: 12, theme: 'coastal' },
+  ikeja: { name: 'Ikeja, Lagos', length: 2800, checkpoints: 10, theme: 'urban' },
+  vi: { name: 'Victoria Island, Lagos', length: 3000, checkpoints: 11, theme: 'coastal' },
+  abuja: { name: 'Abuja city circuit', length: 3500, checkpoints: 14, theme: 'urban' },
+  ekpoma: { name: 'Ekpoma Expressway, Edo', length: 4000, checkpoints: 16, theme: 'highway' },
+  benin: { name: 'Benin Expressway, Edo', length: 3800, checkpoints: 15, theme: 'highway' },
+  auchi: { name: 'Auchi road circuit, Edo', length: 3600, checkpoints: 14, theme: 'rural' },
+  uromi: { name: 'Uromi road circuit, Edo', length: 3400, checkpoints: 13, theme: 'rural' },
+  aau: { name: 'AAU Main Campus, Ekpoma', length: 2500, checkpoints: 9, theme: 'campus' },
+  uniben: { name: 'UNIBEN Main Campus, Benin', length: 2600, checkpoints: 9, theme: 'campus' },
+};
+
+// Car physics constants
+const PHYSICS = {
+  MAX_SPEED: 120,           // units per second
+  ACCELERATION: 40,         // units/s²
+  BRAKE_FORCE: 60,          // units/s²
+  TURN_SPEED: 1.8,          // radians per second at max speed
+  DRAG: 0.98,               // velocity multiplier per tick
+  OFF_TRACK_DRAG: 0.92,     // extra drag when off track
+  TRACK_WIDTH: 24,          // track width in world units
+  COLLISION_RADIUS: 4,      // car collision radius
+  TICK_RATE: 30,            // server physics ticks per second
+  LAPS: 3,                  // number of laps to finish
+};
+
+// Generate track centerline points from seed
+function generateTrackPoints(venue, seed = 0) {
+  const track = TRACKS[venue] || TRACKS.lekki;
+  const points = [];
+  const rng = mulberry32(hashStr(venue + seed));
+
+  // Generate a smooth spline track
+  const numPoints = track.checkpoints;
+  for (let i = 0; i < numPoints; i++) {
+    const angle = (i / numPoints) * Math.PI * 2;
+    // Add some variation to make tracks interesting
+    const radiusVariation = 1 + (rng() - 0.5) * 0.3;
+    const baseRadius = track.length / (2 * Math.PI);
+    const radius = baseRadius * radiusVariation;
+
+    // Add some curvature variation
+    const curvature = (rng() - 0.5) * 0.4;
+    const x = Math.cos(angle + curvature) * radius;
+    const z = Math.sin(angle + curvature) * radius;
+    points.push({ x, z, width: track.TRACK_WIDTH || PHYSICS.TRACK_WIDTH });
+  }
+  // Close the loop
+  points.push({ ...points[0] });
+  return points;
+}
+
+// Simple hash for deterministic track generation
+function hashStr(str) {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) {
+    h = Math.imul(31, h) + str.charCodeAt(i) | 0;
+  }
+  return h >>> 0;
+}
+
+// Mulberry32 PRNG for deterministic track generation
+function mulberry32(a) {
+  return function() {
+    let t = a += 0x6D2B79F5;
+    t = Math.imul(t ^ t >>> 15, t | 1);
+    t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+// Get position on track spline (0-1 progress -> world position + direction)
+function getTrackPosition(points, progress) {
+  const clampedProgress = ((progress % 1) + 1) % 1;
+  const segmentCount = points.length - 1;
+  const segmentProgress = clampedProgress * segmentCount;
+  const segmentIndex = Math.floor(segmentProgress);
+  const t = segmentProgress - segmentIndex;
+
+  const p0 = points[segmentIndex];
+  const p1 = points[Math.min(segmentIndex + 1, points.length - 1)];
+
+  // Catmull-Rom spline for smoother interpolation
+  const pMinus1 = points[(segmentIndex - 1 + segmentCount) % segmentCount];
+  const pPlus2 = points[(segmentIndex + 2) % segmentCount];
+
+  const t2 = t * t;
+  const t3 = t2 * t;
+
+  const x = 0.5 * (
+    (2 * p0.x) +
+    (-pMinus1.x + p1.x) * t +
+    (2 * pMinus1.x - 5 * p0.x + 4 * p1.x - pPlus2.x) * t2 +
+    (-pMinus1.x + 3 * p0.x - 3 * p1.x + pPlus2.x) * t3
+  );
+
+  const z = 0.5 * (
+    (2 * p0.z) +
+    (-pMinus1.z + p1.z) * t +
+    (2 * pMinus1.z - 5 * p0.z + 4 * p1.z - pPlus2.z) * t2 +
+    (-pMinus1.z + 3 * p0.z - 3 * p1.z + pPlus2.z) * t3
+  );
+
+  // Calculate tangent (direction)
+  const dx = 0.5 * (
+    (-pMinus1.x + p1.x) +
+    2 * (2 * pMinus1.x - 5 * p0.x + 4 * p1.x - pPlus2.x) * t +
+    3 * (-pMinus1.x + 3 * p0.x - 3 * p1.x + pPlus2.x) * t2
+  );
+  const dz = 0.5 * (
+    (-pMinus1.z + p1.z) +
+    2 * (2 * pMinus1.z - 5 * p0.z + 4 * p1.z - pPlus2.z) * t +
+    3 * (-pMinus1.z + 3 * p0.z - 3 * p1.z + pPlus2.z) * t2
+  );
+
+  const angle = Math.atan2(dz, dx);
+  const width = p0.width + (p1.width - p0.width) * t;
+
+  return { x, z, angle, width, progress: clampedProgress };
+}
+
+// Check if a point is on track
+function isOnTrack(points, x, z, trackWidth) {
+  // Find closest point on track
+  let minDist = Infinity;
+  const segmentCount = points.length - 1;
+
+  for (let i = 0; i < segmentCount; i++) {
+    const p0 = points[i];
+    const p1 = points[i + 1];
+
+    // Distance from point to line segment
+    const dx = p1.x - p0.x;
+    const dz = p1.z - p0.z;
+    const len2 = dx * dx + dz * dz;
+
+    if (len2 === 0) continue;
+
+    const t = Math.max(0, Math.min(1, ((x - p0.x) * dx + (z - p0.z) * dz) / len2));
+    const closestX = p0.x + t * dx;
+    const closestZ = p0.z + t * dz;
+    const dist = Math.hypot(x - closestX, z - closestZ);
+    const width = p0.width + (p1.width - p0.width) * t;
+
+    if (dist < minDist) minDist = dist;
+  }
+
+  return minDist <= trackWidth / 2;
+}
+
+// AI driver logic - simple path following
+function updateAIDriver(car, trackPoints, dt) {
+  // Look ahead on track
+  const lookAhead = 0.02; // progress units
+  const currentPos = getTrackPosition(trackPoints, car.progress);
+  const targetPos = getTrackPosition(trackPoints, car.progress + lookAhead);
+
+  // Calculate angle to target
+  const targetAngle = Math.atan2(targetPos.z - currentPos.z, targetPos.x - currentPos.x);
+  let angleDiff = targetAngle - car.angle;
+
+  // Normalize angle difference
+  while (angleDiff > Math.PI) angleDiff -= 2 * Math.PI;
+  while (angleDiff < -Math.PI) angleDiff += 2 * Math.PI;
+
+  // Steer towards target
+  const maxTurn = PHYSICS.TURN_SPEED * dt;
+  car.steer = Math.max(-1, Math.min(1, angleDiff / maxTurn));
+
+  // Accelerate on straights, brake in corners
+  const nextCorner = getTrackPosition(trackPoints, car.progress + 0.05);
+  const nextNextCorner = getTrackPosition(trackPoints, car.progress + 0.1);
+  const cornerSharpness = Math.abs(Math.atan2(
+    Math.sin(nextNextCorner.angle - nextCorner.angle),
+    Math.cos(nextNextCorner.angle - nextCorner.angle)
+  ));
+
+  if (cornerSharpness > 0.3) {
+    car.accelerate = 0;
+    car.brake = 0.5;
+  } else if (cornerSharpness > 0.15) {
+    car.accelerate = 0.5;
+    car.brake = 0;
+  } else {
+    car.accelerate = 1;
+    car.brake = 0;
+  }
+
+  // Add some randomness for variety
+  car.steer += (Math.random() - 0.5) * 0.1;
+  car.steer = Math.max(-1, Math.min(1, car.steer));
+}
+
+// Physics update for a single car
+function updateCarPhysics(car, trackPoints, dt, isAI = false) {
+  if (isAI) {
+    updateAIDriver(car, trackPoints, dt);
+  }
+
+  // Apply acceleration
+  if (car.accelerate > 0) {
+    car.speed += PHYSICS.ACCELERATION * car.accelerate * dt;
+  }
+
+  // Apply braking
+  if (car.brake > 0) {
+    car.speed -= PHYSICS.BRAKE_FORCE * car.brake * dt;
+  }
+
+  // Clamp speed
+  car.speed = Math.max(0, Math.min(PHYSICS.MAX_SPEED, car.speed));
+
+  // Apply steering (turn rate depends on speed)
+  if (car.speed > 0.1) {
+    const turnRate = PHYSICS.TURN_SPEED * (car.speed / PHYSICS.MAX_SPEED);
+    car.angle += car.steer * turnRate * dt;
+  }
+
+  // Move forward
+  car.x += Math.cos(car.angle) * car.speed * dt;
+  car.z += Math.sin(car.angle) * car.speed * dt;
+
+  // Check if on track
+  const onTrack = isOnTrack(trackPoints, car.x, car.z, PHYSICS.TRACK_WIDTH);
+
+  // Apply drag
+  if (onTrack) {
+    car.speed *= PHYSICS.DRAG;
+  } else {
+    car.speed *= PHYSICS.OFF_TRACK_DRAG;
+    // Gently push back toward track center
+    const trackPos = getTrackPosition(trackPoints, car.progress);
+    const dx = trackPos.x - car.x;
+    const dz = trackPos.z - car.z;
+    const dist = Math.hypot(dx, dz);
+    if (dist > PHYSICS.TRACK_WIDTH / 2) {
+      car.x += dx * 0.02;
+      car.z += dz * 0.02;
+    }
+  }
+
+  // Update progress along track
+  const trackPos = getTrackPosition(trackPoints, car.progress);
+  const distAlongTrack = Math.hypot(car.x - trackPos.x, car.z - trackPos.z);
+  // Project movement onto track direction
+  const forwardDot = (car.x - trackPos.x) * Math.cos(trackPos.angle) + (car.z - trackPos.z) * Math.sin(trackPos.angle);
+  car.progress += forwardDot / (trackPoints.length * 50); // approximate track length per progress unit
+
+  // Check for lap completion
+  let lapCompleted = false;
+  if (car.progress >= 1) {
+    car.progress -= 1;
+    car.lapsCompleted++;
+    lapCompleted = true;
+  }
+
+  return { onTrack, lapCompleted, progress: car.progress, laps: car.lapsCompleted, speed: car.speed };
+}
+
+// Initialize race physics state
+function initRacePhysics(race) {
+  const track = TRACKS[race.venue] || TRACKS.lekki;
+  const trackPoints = generateTrackPoints(race.venue, String(race._id));
+
+  const participants = race.participants.map((p, i) => {
+    const startProgress = i / Math.max(race.participants.length, 1) * 0.1; // Staggered start
+    const trackPos = getTrackPosition(trackPoints, startProgress);
+    return {
+      user: String(p.user),
+      ai: !!p.ai,
+      car: p.car || AI_CARS[Math.floor(Math.random() * AI_CARS.length)],
+      paint: p.paint || null,
+      x: trackPos.x,
+      z: trackPos.z,
+      angle: trackPos.angle,
+      speed: 0,
+      progress: startProgress,
+      lapsCompleted: 0,
+      steer: 0,
+      accelerate: 0,
+      brake: 0,
+      position: i + 1,
+      finished: false,
+      finishTime: null,
+    };
+  });
+
+  return {
+    trackPoints,
+    trackLength: track.length,
+    laps: PHYSICS.LAPS,
+    participants,
+    startedAt: now(),
+    state: 'COUNTDOWN',
+    countdown: 3,
+  };
+}
 
 export const validateBet = (bet) => {
   const n = Number(bet);
@@ -213,40 +514,177 @@ export async function startRace({ raceId, userId }) {
       clearInterval(mem.countdown);
       race.state = 'STARTED';
       await race.save();
-      emit(`race-${raceId}`, 'race-started', { startedAt: now() });
-      // simulated race: 3 laps, 2s each
-      let lap = 0;
+
+      // Initialize physics state
+      const physics = initRacePhysics(race);
+      mem.physics = physics;
+      mem.tickCount = 0;
+      mem.lastBroadcast = 0;
+
+      emit(`race-${raceId}`, 'race-started', {
+        startedAt: now(),
+        trackPoints: physics.trackPoints.map(p => ({ x: p.x, z: p.z, width: p.width })),
+        laps: physics.laps,
+      });
+
+      // Start physics simulation loop at 30Hz
+      const TICK_MS = 1000 / PHYSICS.TICK_RATE;
       mem.timer = setInterval(async () => {
-        lap++;
-        for (const p of race.participants) {
-          p.lapTimes.push(2000 + Math.floor(Math.random() * 900));
-        }
-        await race.save();
-        emit(`race-${raceId}`, 'race-lap', { lap, lapTimes: race.participants.map((p) => ({ user: String(p.user), last: p.lapTimes[p.lapTimes.length - 1] })) });
-        if (lap >= 3) {
-          clearInterval(mem.timer);
-          race.state = 'FINISHED';
-          race.finishedAt = now();
-          const winnerIdx = race.participants.reduce((best, p, i) => (avg(p.lapTimes) < avg(race.participants[best].lapTimes) ? i : best), 0);
-          await settleRace(race, winnerIdx);
-          await race.save();
-          const winner = race.participants[winnerIdx];
-          const results = race.participants.map((p) => ({ user: String(p.user), avgLap: Math.round(avg(p.lapTimes)), win: p === winner }));
-          emit(`race-${raceId}`, 'race-finished', { winner: String(winner.user), results });
-          for (const p of race.participants) {
-            notify(p.user, {
-              type: 'race_result', title: 'APEX GT race finished',
-              body: String(winner.user) === String(p.user) ? `You won ₦${potLocal(race)}!` : `You placed. Winner: ${String(winner.user)}`,
-              link: '/games/apex-gt', dedupeKey: `race-${raceId}`,
-            }).catch(() => {});
-          }
-          races.delete(String(raceId));
-        }
-      }, 2000);
+        await runRaceTick(raceId, mem);
+      }, TICK_MS);
     }
     countdown--;
   }, 1000);
   return race;
+}
+
+// Run a single physics tick for the race
+async function runRaceTick(raceId, mem) {
+  if (!mem.physics || mem.physics.state !== 'STARTED') return;
+
+  const physics = mem.physics;
+  const dt = 1 / PHYSICS.TICK_RATE;
+  let allFinished = true;
+  let finishedCount = 0;
+
+  // Update each participant's physics
+  for (const car of physics.participants) {
+    if (car.finished) {
+      finishedCount++;
+      continue;
+    }
+    allFinished = false;
+
+    const result = updateCarPhysics(car, physics.trackPoints, dt, car.ai);
+
+    // Check for lap completion
+    if (result.lapCompleted) {
+      const lapNum = result.laps;
+      car.lapTimes = car.lapTimes || [];
+      car.lapTimes.push(Date.now() - physics.startedAt); // Store lap timestamp
+
+      emit(`race-${raceId}`, 'race-lap', {
+        lap: lapNum,
+        user: car.user,
+        lapTime: result.lapCompleted ? Date.now() - (car.lastLapTime || physics.startedAt) : 0,
+        progress: result.progress,
+        lapsCompleted: result.laps,
+        speed: Math.round(result.speed * 3.6), // Convert to km/h
+      });
+      car.lastLapTime = Date.now();
+    }
+
+    // Check for race finish
+    if (result.laps >= physics.laps) {
+      car.finished = true;
+      car.finishTime = Date.now();
+      finishedCount++;
+      emit(`race-${raceId}`, 'race-finish', {
+        user: car.user,
+        position: finishedCount,
+        totalTime: car.finishTime - physics.startedAt,
+      });
+    }
+  }
+
+  // Update positions based on progress (laps + progress within lap)
+  physics.participants.sort((a, b) => {
+    if (b.lapsCompleted !== a.lapsCompleted) return b.lapsCompleted - a.lapsCompleted;
+    return b.progress - a.progress;
+  });
+  physics.participants.forEach((car, i) => {
+    car.position = i + 1;
+  });
+
+  mem.tickCount++;
+
+  // Broadcast state at 10Hz (every 3 ticks at 30Hz)
+  if (mem.tickCount % 3 === 0) {
+    const cars = physics.participants.map(car => ({
+      user: car.user,
+      x: car.x,
+      z: car.z,
+      angle: car.angle,
+      speed: Math.round(car.speed * 3.6), // km/h
+      progress: car.progress,
+      lapsCompleted: car.lapsCompleted,
+      position: car.position,
+      finished: car.finished,
+      ai: car.ai,
+      car: car.car,
+      paint: car.paint,
+    }));
+
+    emit(`race-${raceId}`, 'race-tick', {
+      cars,
+      timestamp: now(),
+      tick: mem.tickCount,
+    });
+  }
+
+  // Check if all finished
+  if (allFinished || finishedCount === physics.participants.length) {
+    clearInterval(mem.timer);
+    await finishRace(raceId, physics);
+  }
+}
+
+// Finish the race and settle bets
+async function finishRace(raceId, physics) {
+  const race = await Race.findById(raceId);
+  if (!race) return;
+
+  race.state = 'FINISHED';
+  race.finishedAt = now();
+
+  // Determine winner (first to finish, or by progress if tie)
+  const winner = physics.participants.reduce((best, car) => {
+    if (car.lapsCompleted > best.lapsCompleted) return car;
+    if (car.lapsCompleted === best.lapsCompleted && car.progress > best.progress) return car;
+    return best;
+  }, physics.participants[0]);
+
+  const winnerIdx = race.participants.findIndex(p => String(p.user) === winner.user);
+
+  // Store lap times in race document for history
+  for (const car of physics.participants) {
+    const p = race.participants.find(rp => String(rp.user) === car.user);
+    if (p) {
+      p.lapTimes = car.lapTimes || [];
+    }
+  }
+
+  await settleRace(race, winnerIdx);
+  await race.save();
+
+  const results = physics.participants.map((car, i) => ({
+    user: car.user,
+    position: car.position,
+    lapsCompleted: car.lapsCompleted,
+    totalTime: car.finishTime ? car.finishTime - physics.startedAt : null,
+    win: car.user === winner.user,
+  }));
+
+  emit(`race-${raceId}`, 'race-finished', {
+    winner: winner.user,
+    results,
+    finalState: physics.participants.map(car => ({
+      user: car.user,
+      position: car.position,
+      laps: car.lapsCompleted,
+      progress: car.progress,
+    })),
+  });
+
+  for (const p of race.participants) {
+    notify(p.user, {
+      type: 'race_result', title: 'APEX GT race finished',
+      body: String(winner.user) === String(p.user) ? `You won ₦${potLocal(race)}!` : `You placed ${results.find(r => r.user === String(p.user))?.position || '?'}. Winner: ${winner.user}`,
+      link: '/games/apex-gt', dedupeKey: `race-${raceId}`,
+    }).catch(() => {});
+  }
+
+  races.delete(String(raceId));
 }
 const potLocal = (race) => (race.bet * race.participants.length).toLocaleString();
 
@@ -377,7 +815,7 @@ export async function setWhotReady({ tableId, userId, ready }) {
   return table;
 }
 
-export async function playWhotCard({ tableId, userId, cardId, marketRule }) {
+export async function playWhotCard({ tableId, userId, cardId, marketRule, calledShape }) {
   const table = await WhotTable.findById(tableId);
   if (!table) throw new Error('Table not found.');
   if (table.state !== 'PLAY') throw new Error('Table is not playing.');
@@ -402,21 +840,35 @@ export async function playWhotCard({ tableId, userId, cardId, marketRule }) {
   const card = player.hand.find((c) => c.id === cardId);
   if (!card) throw new Error('Card not in your hand.');
 
+  // For Whot (20) card, validate calledShape
+  if (card.num === 20) {
+    if (!calledShape || !['Circle', 'Triangle', 'Cross', 'Square', 'Star'].includes(calledShape)) {
+      throw new Error('Whot card requires a called shape.');
+    }
+    // Override the card's shape for matching purposes
+    card.calledShape = calledShape;
+  }
+
   const special = card.num === 20 || [1, 2, 5, 8, 14].includes(card.num);
-  const matches = card.num === 20 || card.shape === top.shape || card.num === top.num;
+  const effectiveShape = card.calledShape || card.shape;
+  const matches = card.num === 20 || effectiveShape === top.shape || card.num === top.num;
   if (!matches) throw new Error('Card does not match the play pile.');
 
   player.hand = player.hand.filter((c) => c.id !== cardId);
   table.playPile.push(card);
-  table.lastPlay = { user: String(userId), card: { num: card.num, shape: card.shape } };
+  table.lastPlay = { user: String(userId), card: { num: card.num, shape: effectiveShape, calledShape: card.calledShape || null } };
 
   // Apply special effects
   let continueTurn = false;
+  let effect = null;
+
   if (card.num === 20) {
-    // Whot wild — next player must match the called shape (simplified: turn passes normally, shape is card's called)
+    // Whot wild — next player must match the called shape
     continueTurn = false;
+    effect = 'whot';
   } else if (card.num === 1) {
     continueTurn = true; // Hold On
+    effect = 'hold-on';
   } else if (card.num === 2) {
     const nextIdx = (idx + 1) % table.players.length;
     const next = table.players[nextIdx];
@@ -452,6 +904,7 @@ export async function playWhotCard({ tableId, userId, cardId, marketRule }) {
       if (i !== idx && table.market.length) table.players[i].hand.push(table.market.pop());
     }
     continueTurn = true; // General Market — play again
+    effect = 'general-market';
   }
 
   // Check winner
@@ -474,7 +927,7 @@ export async function playWhotCard({ tableId, userId, cardId, marketRule }) {
   clearWhotTimer(table);
   startWhotTimer(table);
   emit(`whot-${tableId}`, 'whot-state', await whotPublic(table));
-  return { played: true };
+  return { played: true, effect };
 }
 function clearWhotTimer(table) {
   const mem = whotTables.get(String(table._id));

@@ -41,7 +41,7 @@ whotRouter.post('/tables/:id/ready', wrap(async (req, res) => {
 }));
 
 whotRouter.post('/tables/:id/play', wrap(async (req, res) => {
-  const result = await playWhotCard({ tableId: req.params.id, userId: req.user._id, cardId: req.body?.card, marketRule: req.body?.marketRule });
+  const result = await playWhotCard({ tableId: req.params.id, userId: req.user._id, cardId: req.body?.card, marketRule: req.body?.marketRule, calledShape: req.body?.calledShape });
   res.json({ ...result, table: await whotStateFor(req.user._id, req.params.id) });
 }));
 

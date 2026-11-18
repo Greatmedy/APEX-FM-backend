@@ -25,7 +25,7 @@ import { gamesRouter } from './routes/games.js';
 import { apexGTRouter } from './routes/apex-gt.js';
 import { whotRouter } from './routes/whot.js';
 import { ludoRouter } from './routes/ludo.js';
-import { bindGameIO } from './services/gameEngine.js';
+import { bindGameIO, races } from './services/gameEngine.js';
 
 const app = express();
 const server = http.createServer(app);
@@ -82,6 +82,56 @@ io.on('connection', (socket) => {
   // ---- APEX GT live rooms ----
   socket.on('race:join-room', (raceId) => { if (/^[a-f\d]{24}$/i.test(String(raceId))) socket.join('race:' + raceId); });
   socket.on('race:leave-room', (raceId) => socket.leave('race:' + raceId));
+
+  // Race input handling - store in race memory for physics tick
+  socket.on('race:input', (data) => {
+    const raceId = data?.raceId;
+    if (!raceId || !/^[a-f\d]{24}$/i.test(String(raceId))) return;
+    const mem = races.get(String(raceId));
+    if (!mem || !mem.physics || mem.physics.state !== 'STARTED') return;
+
+    const car = mem.physics.participants.find(c => c.user === socket.data.uid);
+    if (!car || car.ai) return; // AI cars don't accept input
+
+    // Validate and clamp inputs
+    car.steer = Math.max(-1, Math.min(1, Number(data.steer) || 0));
+    car.accelerate = Math.max(0, Math.min(1, Number(data.accelerate) || 0));
+    car.brake = Math.max(0, Math.min(1, Number(data.brake) || 0));
+    car.nitro = !!data.nitro;
+  });
+
+  // Request full state sync (for reconnection)
+  socket.on('race:request-sync', (data) => {
+    const raceId = data?.raceId;
+    if (!raceId || !/^[a-f\d]{24}$/i.test(String(raceId))) return;
+    const mem = races.get(String(raceId));
+    if (!mem || !mem.physics) return;
+
+    const physics = mem.physics;
+    const cars = physics.participants.map(car => ({
+      user: car.user,
+      x: car.x,
+      z: car.z,
+      angle: car.angle,
+      speed: Math.round(car.speed * 3.6),
+      progress: car.progress,
+      lapsCompleted: car.lapsCompleted,
+      position: car.position,
+      finished: car.finished,
+      ai: car.ai,
+      car: car.car,
+      paint: car.paint,
+    }));
+
+    socket.emit('race-tick', {
+      cars,
+      timestamp: now(),
+      tick: mem.tickCount || 0,
+      trackPoints: physics.trackPoints.map(p => ({ x: p.x, z: p.z, width: p.width })),
+      laps: physics.laps,
+      startedAt: physics.startedAt,
+    });
+  });
 
   // ---- Whot live rooms ----
   socket.on('whot:join-room', (tableId) => { if (/^[a-f\d]{24}$/i.test(String(tableId))) socket.join('whot:' + tableId); });
