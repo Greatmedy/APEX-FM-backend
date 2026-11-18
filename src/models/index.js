@@ -109,6 +109,76 @@ const AdLineupSchema = new Schema({
 AdLineupSchema.index({ season: 1, gameweek: 1 }, { unique: true });
 
 const PushSubSchema = new Schema({ user: { type: ObjectId, ref: 'User', index: true }, endpoint: { type: String, unique: true }, keys: { p256dh: String, auth: String }, ua: String }, { timestamps: true });
+
+// Games: virtual naira ledger and per-game balance
+const GameLedgerSchema = new Schema({
+  user: { type: ObjectId, ref: 'User', index: true },
+  game: { type: String, enum: ['apex-gt', 'whot', 'ludo'], index: true },
+  reason: String, amount: { type: Number, index: true }, balanceAfter: Number,
+  relatedId: String,
+}, { timestamps: true });
+GameLedgerSchema.index({ user: 1, game: 1, createdAt: -1 });
+const GameLedger = model('GameLedger', GameLedgerSchema);
+
+const GameBalanceSchema = new Schema({
+  user: { type: ObjectId, ref: 'User', index: true },
+  game: { type: String, enum: ['apex-gt', 'whot', 'ludo'], index: true, required: true },
+  balance: { type: Number, default: 10000000, min: 0 },
+  grantedAt: Date,
+}, { timestamps: true });
+GameBalanceSchema.index({ user: 1, game: 1 }, { unique: true });
+const GameBalance = model('GameBalance', GameBalanceSchema);
+
+// APEX GT races
+const RaceSchema = new Schema({
+  host: { type: ObjectId, ref: 'User' },
+  venue: String,
+  bet: { type: Number, default: 0 },
+  state: { type: String, enum: ['WALLOON', 'COUNTDOWN', 'STARTED', 'FINISHED'], default: 'WALLOON', index: true },
+  participants: [{
+    user: { type: ObjectId, ref: 'User' }, ready: { type: Boolean, default: false },
+    lapTimes: [Number], paint: String, car: String,
+  }],
+  startedAt: Date, finishedAt: Date, winner: { type: ObjectId, ref: 'User' },
+}, { timestamps: true });
+RaceSchema.index({ state: 1, createdAt: -1 });
+const Race = model('Race', RaceSchema);
+
+// Nigerian Whot tables
+const WhotTableSchema = new Schema({
+  host: { type: ObjectId, ref: 'User' },
+  bet: { type: Number, default: 0 },
+  state: { type: String, enum: ['WAITING', 'PLAY', 'FINISHED'], default: 'WAITING', index: true },
+  market: [{ _id: false, num: Number, shape: String, id: String }],
+  playPile: [{ _id: false, num: Number, shape: String, id: String }],
+  players: [{ user: { type: ObjectId, ref: 'User' }, hand: [{ _id: false, num: Number, shape: String, id: String }] }],
+  turnIndex: { type: Number, default: 0 },
+  turnStartedAt: Date,
+  marketRule: { type: String, enum: ['end', 'reshuffle'], default: 'end' },
+  winner: { type: ObjectId, ref: 'User' },
+  lastPlay: Schema.Types.Mixed,
+  finishedAt: Date,
+}, { timestamps: true });
+WhotTableSchema.index({ state: 1, createdAt: -1 });
+const WhotTable = model('WhotTable', WhotTableSchema);
+
+// Nigerian Ludo games
+const LudoGameSchema = new Schema({
+  host: { type: ObjectId, ref: 'User' },
+  bet: { type: Number, default: 0 },
+  state: { type: String, enum: ['WAITING', 'PLAY', 'FINISHED'], default: 'WAITING', index: true },
+  players: [{
+    user: { type: ObjectId, ref: 'User' }, color: { type: String, enum: ['red', 'yellow', 'green', 'blue'] },
+    tokens: { type: [Number], default: [-1, -1, -1, -1] },
+  }],
+  turnIndex: { type: Number, default: 0 },
+  lastDie: Number, lastRoll: Schema.Types.Mixed, sixStreak: { type: Number, default: 0 },
+  winner: { type: ObjectId, ref: 'User' },
+  finishedAt: Date,
+}, { timestamps: true });
+LudoGameSchema.index({ state: 1, createdAt: -1 });
+const LudoGame = model('LudoGame', LudoGameSchema);
+
 export const User = model('User', UserSchema);
 export const Club = model('Club', ClubSchema);
 export const Player = model('Player', PlayerSchema);
@@ -121,3 +191,4 @@ export const Setting = model('Setting', SettingSchema);
 export const AdImage = model('AdImage', AdImageSchema);
 export const AdLineup = model('AdLineup', AdLineupSchema);
 export const PushSub = model('PushSub', PushSubSchema);
+export { GameLedger, GameBalance, Race, WhotTable, LudoGame };

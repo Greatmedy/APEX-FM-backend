@@ -21,6 +21,11 @@ import home, { publicRouter as publicHome } from './routes/home.js';
 import adminRoutes from './routes/admin.js';
 import { publicAds } from './routes/ads.js';
 import pushRoutes from './routes/push.js';
+import { gamesRouter } from './routes/games.js';
+import { apexGTRouter } from './routes/apex-gt.js';
+import { whotRouter } from './routes/whot.js';
+import { ludoRouter } from './routes/ludo.js';
+import { bindGameIO } from './services/gameEngine.js';
 
 const app = express();
 const server = http.createServer(app);
@@ -45,6 +50,10 @@ app.use('/api/clubs', clubs);
 app.use('/api/tactics', tacticsRouter);
 app.use('/api/matches', matches);
 app.use('/api', home);
+app.use('/api/games', gamesRouter);
+app.use('/api/games/apex-gt', apexGTRouter);
+app.use('/api/games/whot', whotRouter);
+app.use('/api/games/ludo', ludoRouter);
 app.use('/api/admin', adminRoutes);
 app.use('/api/ads', publicAds);
 app.use('/api', (req, res) => res.status(404).json({ error: 'Route not found.' }));
@@ -59,6 +68,7 @@ app.use((err, req, res, next) => {
 
 const io = new Server(server, { cors: { origin: allow, credentials: true }, pingInterval: 10000, pingTimeout: 15000 });
 setIO(io);
+bindGameIO(io);
 io.use((socket, next) => {
   try { socket.data.uid = verifyToken(socket.handshake.auth?.token || '').id; } catch { socket.data.uid = null; }
   next();
@@ -68,6 +78,18 @@ io.on('connection', (socket) => {
   socket.on('join', (fixtureId, ack) => { if (/^[a-f\d]{24}$/i.test(String(fixtureId))) socket.join('fixture:' + fixtureId); if (typeof ack === 'function') ack({ serverNow: Date.now() }); });
   socket.on('leave', (fixtureId) => socket.leave('fixture:' + fixtureId));
   socket.on('ping-time', (ack) => typeof ack === 'function' && ack({ serverNow: Date.now() }));
+
+  // ---- APEX GT live rooms ----
+  socket.on('race:join-room', (raceId) => { if (/^[a-f\d]{24}$/i.test(String(raceId))) socket.join('race:' + raceId); });
+  socket.on('race:leave-room', (raceId) => socket.leave('race:' + raceId));
+
+  // ---- Whot live rooms ----
+  socket.on('whot:join-room', (tableId) => { if (/^[a-f\d]{24}$/i.test(String(tableId))) socket.join('whot:' + tableId); });
+  socket.on('whot:leave-room', (tableId) => socket.leave('whot:' + tableId));
+
+  // ---- Ludo live rooms ----
+  socket.on('ludo:join-room', (gameId) => { if (/^[a-f\d]{24}$/i.test(String(gameId))) socket.join('ludo:' + gameId); });
+  socket.on('ludo:leave-room', (gameId) => socket.leave('ludo:' + gameId));
 });
 
 async function seedBasics() {

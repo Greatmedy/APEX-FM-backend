@@ -4,8 +4,9 @@ import { sendResetEmail } from '../services/mail.js';
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import rateLimit from 'express-rate-limit';
-import { User } from '../models/index.js';
+import { User, GameBalance } from '../models/index.js';
 import { auth, signToken, wrap } from '../middleware/auth.js';
+import { START_BALANCE } from '../services/gameLedger.js';
 
 const r = Router();
 const limiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 60, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many attempts. Try again in a few minutes.' } });
@@ -26,6 +27,12 @@ r.post('/signup', limiter, wrap(async (req, res) => {
   if (await User.exists({ username: uname.toLowerCase() })) return res.status(409).json({ error: 'That username is taken.', field: 'username' });
   if (await User.exists({ email: String(email).toLowerCase() })) return res.status(409).json({ error: 'An account with that email already exists.', field: 'email' });
   const user = await User.create({ username: uname, usernameDisplay: uname, email, passwordHash: await bcrypt.hash(password, 10), onboarding: { step: 'club' } });
+  // Initialize game balances for new user
+  await Promise.all([
+    GameBalance.create({ user: user._id, game: 'apex-gt', balance: START_BALANCE }),
+    GameBalance.create({ user: user._id, game: 'whot', balance: START_BALANCE }),
+    GameBalance.create({ user: user._id, game: 'ludo', balance: START_BALANCE }),
+  ]);
   res.status(201).json({ token: signToken(user), user: userOut(user) });
 }));
 

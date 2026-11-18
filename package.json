@@ -7,7 +7,8 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
-    "test:sim": "node scripts/simtest.js"
+    "test:sim": "node scripts/simtest.js",
+    "test": "jest"
   },
   "engines": {
     "node": ">=18"
@@ -24,5 +25,8 @@
     "nodemailer": "^10.0.14",
     "socket.io": "^4.7.5",
     "web-push": "^3.6.7"
+  },
+  "devDependencies": {
+    "jest": "^30.5.2"
   }
 }
