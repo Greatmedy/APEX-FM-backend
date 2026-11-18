@@ -3,7 +3,7 @@ import { Router } from 'express';
 import { auth, wrap } from '../middleware/auth.js';
 import { GameBalance, GameLedger } from '../models/index.js';
 import { getBalance, ledger, START_BALANCE } from '../services/gameLedger.js';
-import { createRace, joinRace, leaveRace, setRaceReady, startRace, racePublic, listRaces, VENUE_LIST, validateBet } from '../services/gameEngine.js';
+import { createRace, joinRace, leaveRace, setRaceReady, startRace, addAIRacers, racePublic, listRaces, VENUE_LIST, validateBet } from '../services/gameEngine.js';
 import { notify } from '../services/notify.js';
 
 export const apexGTRouter = Router();
@@ -56,6 +56,12 @@ apexGTRouter.post('/races/:id/ready', wrap(async (req, res) => {
 apexGTRouter.post('/races/:id/start', wrap(async (req, res) => {
   const race = await startRace({ raceId: req.params.id, userId: req.user._id });
   res.json({ race: await racePublic(race) });
+}));
+
+apexGTRouter.post('/races/:id/start-ai', wrap(async (req, res) => {
+  const race = await addAIRacers({ raceId: req.params.id, count: req.body?.count || 3 });
+  const started = await startRace({ raceId: req.params.id, userId: req.user._id });
+  res.json({ race: await racePublic(started) });
 }));
 
 // Car parts catalog + purchase

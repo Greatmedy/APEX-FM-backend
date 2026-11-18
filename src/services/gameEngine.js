@@ -5,6 +5,7 @@ import { Types } from 'mongoose';
 import { Race, WhotTable, LudoGame, GameBalance } from '../models/index.js';
 import { move, escrow, releaseEscrow, START_BALANCE } from './gameLedger.js';
 import { notify } from './notify.js';
+import { User } from '../models/index.js';
 
 const GAME = 'apex-gt';
 const WHOT_GAME = 'whot';
@@ -15,6 +16,31 @@ const emit = (room, event, payload) => ioRef.io?.to(room).emit(event, payload);
 
 const MIN_BET = 5000;
 const MAX_BET = 100000;
+const AUTO_CLEANUP_MS = 60000; // 1 minute
+const AI_NAMES = ['AI Turbo', 'AI Nitro', 'AI Velocity', 'AI Phantom', 'AI Striker', 'AI Vortex', 'AI Inferno', 'AI Spectre'];
+const AI_CARS = ['Apex GT-R', 'Vortex', 'Phantom', 'Striker', 'Velocity', 'Inferno', 'Eclipse', 'Titan', 'Spectre', 'Hyperion', 'Nova', 'Venom'];
+
+const races = new Map(); // raceId -> in-memory state
+const whotTables = new Map(); // tableId -> { timer, turnDeadline }
+const ludoGames = new Map(); // gameId -> mem
+
+// Auto-cleanup: remove empty races/tables/games after 1 minute
+function scheduleCleanup(room, kind) {
+  setTimeout(async () => {
+    if (kind === 'race') {
+      const r = await Race.findById(room).lean();
+      if (r && r.participants.length === 0) { await Race.deleteOne({ _id: room }); races.delete(room); }
+    }
+    if (kind === 'whot') {
+      const t = await WhotTable.findById(room).lean();
+      if (t && t.players.length === 0) { await WhotTable.deleteOne({ _id: room }); whotTables.delete(room); }
+    }
+    if (kind === 'ludo') {
+      const g = await LudoGame.findById(room).lean();
+      if (g && g.players.length === 0) { await LudoGame.deleteOne({ _id: room }); ludoGames.delete(room); }
+    }
+  }, AUTO_CLEANUP_MS);
+}
 
 // ============================== HELPERS ==============================
 const now = () => Date.now();
@@ -56,8 +82,6 @@ const VENUES = {
 };
 export const VENUE_LIST = Object.values(VENUES);
 
-const races = new Map(); // raceId -> in-memory state
-
 export async function createRace({ hostId, venue, bet }) {
   if (!VENUES[venue]) throw new Error('Unknown venue.');
   const amount = validateBet(bet);
@@ -69,7 +93,43 @@ export async function createRace({ hostId, venue, bet }) {
     participants: [{ user: hostId, ready: false, lapTimes: [] }],
   });
   races.set(String(race._id), { timer: null, countdown: null, lap: 0, startedAt: 0 });
+  scheduleCleanup(String(race._id), 'race', () => race.participants.length === 0);
   return race;
+}
+
+export async function addAIRacers({ raceId, count }) {
+  const race = await Race.findById(raceId);
+  if (!race) throw new Error('Race not found.');
+  if (race.state !== 'WALLOON') throw new Error('Race already started.');
+  const n = Math.max(1, Math.min(3, Number(count) || 1));
+  for (let i = 0; i < n; i++) {
+    const aiUser = await createAIUser();
+    race.participants.push({ user: aiUser, ready: true, lapTimes: [], ai: true, car: AI_CARS[Math.floor(Math.random() * AI_CARS.length)] });
+  }
+  // Auto-ready the host for AI races
+  const hostP = race.participants.find(p => String(p.user) === String(race.host));
+  if (hostP) hostP.ready = true;
+  await race.save();
+  return race;
+}
+
+async function createAIUser() {
+  // Find or create a lightweight AI user record
+  const name = `ai_${AI_NAMES[Math.floor(Math.random() * AI_NAMES.length)]}_${Math.floor(Math.random() * 10000)}`;
+  let ai = await User.findOne({ username: name.toLowerCase() });
+  if (!ai) {
+    ai = await User.create({
+      username: name.toLowerCase(),
+      usernameDisplay: name,
+      email: `${name.toLowerCase()}@ai.apexfm.internal`,
+      passwordHash: '$2a$10$' + Math.random().toString(36).slice(2, 28),
+      onboarding: { step: 'done' },
+      isAI: true,
+    });
+    // SEED AI BALANCE
+    await GameBalance.create({ user: ai._id, game: GAME, balance: 10000000 });
+  }
+  return ai._id;
 }
 
 export async function joinRace({ raceId, userId }) {
@@ -131,7 +191,7 @@ export async function startRace({ raceId, userId }) {
   if (!race) throw new Error('Race not found.');
   if (String(race.host) !== String(userId)) throw new Error('Only the host can start.');
   if (race.state !== 'WALLOON') throw new Error('Race already started.');
-  if (race.participants.length < 2) throw new Error('Need at least 2 racers.');
+  if (race.participants.length < 1) throw new Error('Need at least 1 racer.');
   if (!race.participants.every((p) => p.ready)) throw new Error('Every racer must be ready.');
   await escrowRace(race);
   race.state = 'COUNTDOWN';
@@ -215,8 +275,6 @@ function buildDeck() {
 }
 const handSize = () => 4 + Math.floor(Math.random() * 3); // 4–6
 
-const whotTables = new Map(); // tableId -> { timer, turnDeadline }
-
 export async function createWhotTable({ hostId, bet }) {
   const amount = validateBet(bet);
   if (!amount) throw new Error(`Bet must be ₦${MIN_BET.toLocaleString()}–₦${MAX_BET.toLocaleString()}.`);
@@ -225,6 +283,7 @@ export async function createWhotTable({ hostId, bet }) {
   const deck = buildDeck();
   const table = await WhotTable.create({ host: hostId, bet: amount, deck: [], playPile: [], state: 'WAITING', market: deck, players: [{ user: hostId, hand: [] }] });
   whotTables.set(String(table._id), { timer: null });
+  scheduleCleanup(String(table._id), 'whot', () => table.players.length === 0);
   return table;
 }
 
@@ -435,7 +494,6 @@ export async function listWhotTables() {
 
 // ============================== LUDO ==============================
 const LUDO_COLORS = ['red', 'yellow', 'green', 'blue'];
-const ludoGames = new Map(); // gameId -> mem
 
 export async function createLudoGame({ hostId, bet = 0 }) {
   const amount = Number(bet) || 0;
@@ -444,6 +502,7 @@ export async function createLudoGame({ hostId, bet = 0 }) {
     host: hostId, bet: amount, state: 'WAITING',
     players: [{ user: hostId, color: LUDO_COLORS[0], tokens: [-1, -1, -1, -1] }],
   });
+  scheduleCleanup(String(game._id), 'ludo', () => game.players.length === 0);
   return game;
 }
 
