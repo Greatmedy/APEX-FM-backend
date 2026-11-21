@@ -362,7 +362,7 @@ function initRacePhysics(race) {
     laps: PHYSICS.LAPS,
     participants,
     startedAt: now(),
-    state: 'COUNTDOWN',
+    state: 'STARTED',
     countdown: 3,
   };
 }

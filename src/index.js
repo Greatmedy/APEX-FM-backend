@@ -106,8 +106,8 @@ io.on('connection', (socket) => {
   socket.on('ping-time', (ack) => typeof ack === 'function' && ack({ serverNow: Date.now() }));
 
   // ---- APEX GT live rooms ----
-  socket.on('race:join-room', (raceId) => { if (/^[a-f\d]{24}$/i.test(String(raceId))) socket.join('race:' + raceId); });
-  socket.on('race:leave-room', (raceId) => socket.leave('race:' + raceId));
+  socket.on('race:join-room', (raceId) => { if (/^[a-f\d]{24}$/i.test(String(raceId))) socket.join('race-' + raceId); });
+  socket.on('race:leave-room', (raceId) => socket.leave('race-' + raceId));
 
   // Race input handling - store in race memory for physics tick
   socket.on('race:input', (data) => {
