@@ -62,6 +62,32 @@ app.use((err, req, res, next) => {
   if (err?.name === 'CastError') return res.status(400).json({ error: 'Invalid id.' });
   if (err?.type === 'entity.too.large') return res.status(413).json({ error: 'Upload is too large.' });
   if (err?.message === 'Origin not allowed') return res.status(403).json({ error: 'Origin not allowed.' });
+  // Validation errors from game engine - return 400 with actual message
+  const validationErrors = [
+    'Every racer must be ready',
+    'Race already started',
+    'Race is full',
+    'Need at least',
+    'Insufficient virtual funds',
+    'Unknown venue',
+    'Bet must be',
+    'Already in this race',
+    'Not your turn',
+    'Card does not match',
+    'Market is empty',
+    'Whot card requires',
+    'It is not your turn',
+    'Table is not playing',
+    'Table already playing',
+    'Game not playing',
+    'Roll the die first',
+    'Move exceeds board',
+    'You need a 6',
+    'Invalid token',
+  ];
+  if (validationErrors.some(v => err?.message?.includes?.(v))) {
+    return res.status(400).json({ error: err.message });
+  }
   console.error(err);
   res.status(500).json({ error: 'Something went wrong on our side. Try again.' });
 });
